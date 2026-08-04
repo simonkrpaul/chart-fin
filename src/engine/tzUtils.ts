@@ -32,11 +32,9 @@ export function toZonedTime(utcDate: Date, tz: string): Date {
  * @param localDateTimeStr – "YYYY-MM-DDTHH:MM:SS"
  * @param tz – IANA timezone
  */
-export function fromZonedTime(localDateTimeStr: string, tz: string): Date {
-  // Binary-search the UTC instant whose wall-clock in `tz` matches localDateTimeStr
-  const target = new Date(localDateTimeStr + 'Z'); // treat as UTC first
+export function fromZonedTime(localDateTimeStr: string | Date, tz: string): Date {
+  const target = localDateTimeStr instanceof Date ? localDateTimeStr : new Date(localDateTimeStr + 'Z');
   const targetLocal = toZonedTime(target, tz);
-  // Offset = difference between "fake local" and UTC-anchor
   const offsetMs = target.getTime() - new Date(
     targetLocal.getFullYear(),
     targetLocal.getMonth(),

@@ -35,6 +35,8 @@ export interface ParseResult {
   symbol?: string;
 }
 
+const EARLIEST_ACCEPTABLE_TS = Date.UTC(2000, 0, 1);
+
 export async function parseOHLCVFile(file: File): Promise<ParseResult> {
   const text = await file.text();
   const lower = file.name.toLowerCase();
@@ -100,6 +102,10 @@ function parseCSV(text: string, filename: string): ParseResult {
     const ts = parseTimestamp(tsRaw);
     if (ts === null) {
       errors.push(`Row ${i + 1}: cannot parse timestamp "${tsRaw}"`);
+      continue;
+    }
+    if (ts < EARLIEST_ACCEPTABLE_TS) {
+      errors.push(`Row ${i + 1}: timestamp ${tsRaw} is before 2000-01-01 and will be skipped`);
       continue;
     }
 
@@ -190,6 +196,7 @@ function parseJSON(text: string, _filename: string): ParseResult {
       const tsRaw = obj.timestamp ?? obj.time ?? obj.date ?? obj.datetime ?? obj.t ?? obj.open_time;
       const ts = parseTimestamp(String(tsRaw));
       if (ts === null) { errors.push(`Item ${i}: bad timestamp "${tsRaw}"`); continue; }
+      if (ts < EARLIEST_ACCEPTABLE_TS) { errors.push(`Item ${i}: timestamp "${tsRaw}" is before 2000-01-01 and will be skipped`); continue; }
       if (seen.has(ts)) continue;
       seen.add(ts);
       candles.push({
@@ -217,8 +224,9 @@ function parseTimestamp(raw: string | number | undefined | null): number | null 
   if (raw === undefined || raw === null || raw === '') return null;
   const n = Number(raw);
   if (!isNaN(n)) {
-    // Unix seconds (< year 2100 in ms = 4102444800000)
-    return n < 4_102_444_800 ? n * 1000 : n;
+    // Accept both Unix seconds and Unix milliseconds, but normalize everything
+    // to Unix milliseconds so local history and live Bybit candles share one contract.
+    return Math.abs(n) < 1e11 ? n * 1000 : n;
   }
   const s = String(raw).trim();
   // Replace space separator with T for ISO parsing

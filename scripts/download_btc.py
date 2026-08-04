@@ -175,19 +175,25 @@ if not args.binance:
                 "volume_(currency)" if "volume_(currency)" in df.columns else \
                 "volume" if "volume" in df.columns else None
 
-    rows = {
-        "timestamp_s": pd.to_numeric(df["timestamp"], errors="coerce"),
-        "open":        pd.to_numeric(df["open"],        errors="coerce"),
-        "high":        pd.to_numeric(df["high"],         errors="coerce"),
-        "low":         pd.to_numeric(df["low"],          errors="coerce"),
-        "close":       pd.to_numeric(df[close_col],      errors="coerce"),
-        "volume":      pd.to_numeric(df[vol_col],        errors="coerce") if vol_col else 0.0,
-    }
-    clean = pd.DataFrame(rows).dropna(subset=["timestamp_s", "open", "high", "low", "close"])
-    clean = clean.drop_duplicates("timestamp_s").sort_values("timestamp_s")
+    # Legacy local BTC CSVs commonly use "Timestamp" in Unix seconds.
+    local_timestamp_col = "timestamp" if "timestamp" in df.columns else "time" if "time" in df.columns else "t"
 
-    # Convert timestamp: Unix seconds → Unix milliseconds
-    clean["timestamp"] = (clean["timestamp_s"] * 1000).astype("int64")
+    rows = {
+        "timestamp_raw": pd.to_numeric(df[local_timestamp_col], errors="coerce"),
+        "open":          pd.to_numeric(df["open"],        errors="coerce"),
+        "high":          pd.to_numeric(df["high"],        errors="coerce"),
+        "low":           pd.to_numeric(df["low"],         errors="coerce"),
+        "close":         pd.to_numeric(df[close_col],      errors="coerce"),
+        "volume":        pd.to_numeric(df[vol_col],        errors="coerce") if vol_col else 0.0,
+    }
+    clean = pd.DataFrame(rows).dropna(subset=["timestamp_raw", "open", "high", "low", "close"])
+    clean = clean.drop_duplicates("timestamp_raw").sort_values("timestamp_raw")
+
+    # Normalize any local dataset to the same Unix-ms contract used by live Bybit candles.
+    # Seconds-based inputs are 10-digit (~1.3e9), millisecond-based inputs are 13-digit (~1.3e12).
+    clean["timestamp"] = clean["timestamp_raw"].apply(
+        lambda v: int(v * 1000) if abs(v) < 1e11 else int(v)
+    )
     clean = clean[["timestamp", "open", "high", "low", "close", "volume"]].reset_index(drop=True)
     print(f"  Clean rows: {len(clean):,}")
 
@@ -203,7 +209,9 @@ def resample(df_ms: pd.DataFrame, rule: str, label: str = "left") -> pd.DataFram
         "close":  "last",
         "volume": "sum",
     }).dropna(subset=["open", "close"])
-    ohlcv["timestamp"] = ohlcv.index.astype("int64") // 1_000_000  # back to ms
+    # Preserve the millisecond epoch exactly. `astype("int64")` on a datetime64[ms, UTC]
+    # index already yields the correct Unix-ms value; dividing by 1_000_000 corrupts it.
+    ohlcv["timestamp"] = ohlcv.index.astype("int64")
     return ohlcv[["timestamp", "open", "high", "low", "close", "volume"]].reset_index(drop=True)
 
 # ── Write files ───────────────────────────────────────────────────────────

@@ -584,26 +584,24 @@ export function createChartStore(panelId: string = 'p1'): StoreApi<ChartState & 
     },
 
     appendCandles: (incoming) => {
-      const { primarySlots, rawCandles, timeframe, baseTimeframe } = get();
-      const tsIndex = buildTimestampIndex(primarySlots);
-      const newRaw = [...rawCandles];
-
-      for (const c of incoming) {
-        const si = tsIndex.get(c.timestamp);
-        if (si !== undefined) {
-          primarySlots[si] = { ...primarySlots[si], candle: c };
-        }
-        // Update raw cache (replace existing or add new)
-        const existingIdx = newRaw.findIndex(r => r.timestamp === c.timestamp);
-        if (existingIdx >= 0) newRaw[existingIdx] = c;
-        else newRaw.push(c);
-      }
-
       set(state => {
+        const tsIndex = buildTimestampIndex(state.primarySlots);
+        const nextPrimarySlots = [...state.primarySlots];
+        const newRaw = [...state.rawCandles];
+
+        for (const c of incoming) {
+          const si = tsIndex.get(c.timestamp);
+          if (si !== undefined) {
+            nextPrimarySlots[si] = { ...nextPrimarySlots[si], candle: c };
+          }
+          const existingIdx = newRaw.findIndex(r => r.timestamp === c.timestamp);
+          if (existingIdx >= 0) newRaw[existingIdx] = c;
+          else newRaw.push(c);
+        }
+
         state.rawCandles = newRaw;
-        state.primarySlots = [...primarySlots];
-        // Keep base candles live when currently viewing the base timeframe.
-        if (baseTimeframe === null || timeframe === baseTimeframe) {
+        state.primarySlots = nextPrimarySlots;
+        if (state.baseTimeframe === null || state.timeframe === state.baseTimeframe) {
           state.baseCandles = newRaw;
         }
       });
