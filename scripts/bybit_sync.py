@@ -178,7 +178,7 @@ def resample(df: pd.DataFrame, rule: str) -> pd.DataFrame:
         "close": "last",
         "volume": "sum",
     }).dropna(subset=["open"])
-    ohlcv["timestamp"] = (ohlcv.index.astype("int64") // 10**6).astype(int)
+    ohlcv["timestamp"] = (ohlcv.index.astype("int64") // 10**6).astype("int64")
     return ohlcv[["timestamp", "open", "high", "low", "close", "volume"]].reset_index(drop=True)
 
 
