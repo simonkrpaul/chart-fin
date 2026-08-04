@@ -1,17 +1,18 @@
 /**
  * BybitLiveLoader – public BTCUSDT perpetual live feed bridge.
  *
- * Steps:
- *   1) Fetch recent 1-minute candles from Bybit REST.
- *   2) Load them into the chart as the initial dataset.
- *   3) Open a public websocket subscription for live kline updates.
- *   4) Append each new candle into the live chart.
+ * Features:
+ *   1) Probes Bybit connectivity on mount (green/red indicator).
+ *   2) Syncs full REST history using pagination (fills gaps from downtime).
+ *   3) Loads synced candles into the chart store (merges with local data).
+ *   4) Opens a public WebSocket for real-time kline updates.
+ *   5) Button is greyed out when Bybit is unreachable.
  */
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useChartStore } from '../store/chartStore';
-import { resampleCandles } from '../engine/resampleEngine';
-import { detectTimeframe } from '../utils/dataParser';
 import type { RawCandle } from '../types';
+
+/* ── Bybit API types ──────────────────────────────────────────────────────── */
 
 interface BybitKlinePayload {
   topic: string;
@@ -23,160 +24,267 @@ interface BybitKlinePayload {
     low: string | number;
     close: string | number;
     volume: string | number;
+    confirm?: boolean;
   }>;
 }
 
 interface BybitRestKlineResponse {
+  retCode?: number;
   result?: {
     list?: Array<string[]>;
   };
 }
 
+/* ── Constants ────────────────────────────────────────────────────────────── */
+
 const WS_URL = 'wss://stream.bybit.com/v5/public/linear';
-const REST_URL = 'https://api.bybit.com/v5/market/kline?category=linear&symbol=BTCUSDT&interval=5&limit=1000';
-const FIVE_MINUTES_MS = 5 * 60 * 1000;
-const EARLIEST_ACCEPTABLE_TS = Date.UTC(2000, 0, 1);
+const REST_BASE = 'https://api.bybit.com/v5/market/kline';
+const SYMBOL = 'BTCUSDT';
+const CATEGORY = 'linear';
+const REST_LIMIT = 1000;
+const ONE_MIN_MS = 60_000;
+const EARLIEST_ACCEPTABLE_TS = Date.UTC(2017, 0, 1);
+/** How many days of REST history to fetch when syncing (covers week+ offline). */
+const SYNC_DAYS = 14;
+/** Rate-limit pause between REST pages (ms). */
+const PAGE_DELAY_MS = 120;
+
+/* ── Helpers ──────────────────────────────────────────────────────────────── */
+
+function toTimestampMs(value: string | number | undefined): number {
+  const n = Number(value ?? 0);
+  if (!Number.isFinite(n)) return 0;
+  // Bybit v5 always returns ms timestamps, but guard against seconds
+  return n < 1e11 ? n * 1000 : n;
+}
+
+function parseBybitRow(row: string[]): RawCandle | null {
+  const [start, open, high, low, close, volume] = row;
+  const ts = toTimestampMs(start);
+  if (ts < EARLIEST_ACCEPTABLE_TS) return null;
+  const o = Number(open), h = Number(high), l = Number(low), c = Number(close), v = Number(volume);
+  if ([o, h, l, c].some(x => !Number.isFinite(x))) return null;
+  return { timestamp: ts, open: o, high: h, low: l, close: c, volume: Number.isFinite(v) ? v : 0, symbol: SYMBOL, exchange: 'Bybit' };
+}
+
+function parseWsBar(bar: BybitKlinePayload['data'][0]): RawCandle | null {
+  const ts = toTimestampMs(bar.start ?? bar.timestamp);
+  if (ts < EARLIEST_ACCEPTABLE_TS) return null;
+  const o = Number(bar.open), h = Number(bar.high), l = Number(bar.low), c = Number(bar.close), v = Number(bar.volume);
+  if ([o, h, l, c].some(x => !Number.isFinite(x))) return null;
+  return { timestamp: ts, open: o, high: h, low: l, close: c, volume: Number.isFinite(v) ? v : 0, symbol: SYMBOL, exchange: 'Bybit' };
+}
+
+/**
+ * Fetch paginated 1-minute klines from Bybit REST.
+ * Bybit returns newest-first, so we paginate backwards from endMs.
+ */
+async function fetchPaginatedHistory(
+  startMs: number,
+  endMs: number,
+  onProgress?: (pct: number, count: number) => void,
+): Promise<RawCandle[]> {
+  const all: RawCandle[] = [];
+  let cursorEnd = endMs;
+  const totalSpan = endMs - startMs;
+  let pageCount = 0;
+
+  while (cursorEnd > startMs) {
+    const url = `${REST_BASE}?category=${CATEGORY}&symbol=${SYMBOL}&interval=1&limit=${REST_LIMIT}&start=${startMs}&end=${cursorEnd}`;
+    const resp = await fetch(url);
+    if (!resp.ok) throw new Error(`Bybit REST ${resp.status}`);
+
+    const payload = (await resp.json()) as BybitRestKlineResponse;
+    const list = payload.result?.list ?? [];
+    if (!list.length) break;
+
+    for (const row of list) {
+      const bar = parseBybitRow(row);
+      if (bar && bar.timestamp >= startMs) all.push(bar);
+    }
+
+    // Oldest timestamp in batch (Bybit returns newest first, last element is oldest)
+    const oldestTs = toTimestampMs(list[list.length - 1][0]);
+    cursorEnd = oldestTs - 1;
+    pageCount++;
+
+    if (onProgress) {
+      const fetchedSpan = endMs - cursorEnd;
+      const pct = totalSpan > 0 ? Math.min(100, Math.round((fetchedSpan / totalSpan) * 100)) : 100;
+      onProgress(pct, all.length);
+    }
+
+    if (list.length < REST_LIMIT) break;
+    // Small delay to respect rate limits
+    await new Promise(r => setTimeout(r, PAGE_DELAY_MS));
+  }
+
+  // Deduplicate and sort ascending
+  const seen = new Set<number>();
+  const deduped: RawCandle[] = [];
+  for (const bar of all) {
+    if (!seen.has(bar.timestamp)) {
+      seen.add(bar.timestamp);
+      deduped.push(bar);
+    }
+  }
+  deduped.sort((a, b) => a.timestamp - b.timestamp);
+  return deduped;
+}
+
+/**
+ * Quick connectivity check — fetch 1 bar to test if Bybit API is reachable.
+ */
+async function probeBybitConnection(): Promise<boolean> {
+  try {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 5000);
+    const resp = await fetch(
+      `${REST_BASE}?category=${CATEGORY}&symbol=${SYMBOL}&interval=1&limit=1`,
+      { signal: controller.signal },
+    );
+    clearTimeout(timeoutId);
+    if (!resp.ok) return false;
+    const data = (await resp.json()) as BybitRestKlineResponse;
+    return (data.result?.list?.length ?? 0) > 0;
+  } catch {
+    return false;
+  }
+}
+
+/* ── Component ────────────────────────────────────────────────────────────── */
 
 export const BybitLiveLoader: React.FC = () => {
-  const { loadCandles, appendCandles, setTimeframe, theme, rawCandles, baseTimeframe } = useChartStore();
+  const { loadCandles, appendCandles, setTimeframe, theme, rawCandles, baseCandles } = useChartStore();
   const wsRef = useRef<WebSocket | null>(null);
-  const [status, setStatus] = useState('');
-  const [connected, setConnected] = useState(false);
+  const [status, setStatus] = useState('Checking Bybit…');
+  const [wsConnected, setWsConnected] = useState(false);
+  const [apiReachable, setApiReachable] = useState<boolean | null>(null); // null = probing
   const [loading, setLoading] = useState(false);
+  const probeInterval = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const text = theme === 'dark' ? '#d1d4dc' : '#131722';
   const border = theme === 'dark' ? '#2a2e39' : '#c8cad5';
   const okColor = '#26a69a';
   const errorColor = '#ef5350';
   const accent = '#2962ff';
+  const disabledBg = theme === 'dark' ? '#23262f' : '#e8eaed';
+  const disabledText = theme === 'dark' ? '#555' : '#999';
+
+  /* ── Connectivity probe ─────────────────────────────────────────────────── */
+
+  const runProbe = useCallback(async () => {
+    const ok = await probeBybitConnection();
+    setApiReachable(ok);
+    if (ok) {
+      setStatus(wsConnected ? `Live · ${SYMBOL}` : 'Bybit reachable');
+    } else {
+      setStatus('Bybit unreachable');
+    }
+  }, [wsConnected]);
 
   useEffect(() => {
+    runProbe();
+    // Re-probe every 30 seconds
+    probeInterval.current = setInterval(runProbe, 30_000);
     return () => {
+      if (probeInterval.current) clearInterval(probeInterval.current);
       if (wsRef.current) {
         wsRef.current.close();
         wsRef.current = null;
       }
     };
-  }, []);
+  }, [runProbe]);
 
-  const toTimestampMs = (value: string | number | undefined): number => {
-    const n = Number(value ?? 0);
-    if (!Number.isFinite(n)) return 0;
-    // Bybit REST returns start in ms already; websocket frames also use ms.
-    // If the incoming payload is a seconds-based epoch, convert once to ms.
-    return n > 1e12 ? n : n > 1e9 ? n : n * 1000;
-  };
+  /* ── Stop feed ──────────────────────────────────────────────────────────── */
 
-  const normalizeBybitBar = (row: { start: string | number; timestamp?: string | number; open: string | number; high: string | number; low: string | number; close: string | number; volume: string | number }): RawCandle => ({
-    timestamp: toTimestampMs(row.start ?? row.timestamp),
-    open: Number(row.open),
-    high: Number(row.high),
-    low: Number(row.low),
-    close: Number(row.close),
-    volume: Number(row.volume),
-    symbol: 'BTCUSDT',
-    exchange: 'Bybit',
-  });
-
-  const isValidBar = (bar: RawCandle): boolean => {
-    return Number.isFinite(bar.timestamp) && bar.timestamp >= EARLIEST_ACCEPTABLE_TS;
-  };
-
-  const fetchHistory = async (): Promise<RawCandle[]> => {
-    const resp = await fetch(REST_URL);
-    if (!resp.ok) {
-      throw new Error(`Bybit REST request failed: ${resp.status}`);
-    }
-
-    const payload = (await resp.json()) as BybitRestKlineResponse;
-    const list = payload.result?.list ?? [];
-    if (!list.length) {
-      throw new Error('Bybit returned no kline history.');
-    }
-
-    return list
-      .map((row) => {
-        const [start, open, high, low, close, volume] = row;
-        const bar = {
-          timestamp: toTimestampMs(start),
-          open: Number(open),
-          high: Number(high),
-          low: Number(low),
-          close: Number(close),
-          volume: Number(volume),
-          symbol: 'BTCUSDT',
-          exchange: 'Bybit',
-        } as RawCandle;
-        return isValidBar(bar) ? bar : null;
-      })
-      .filter((bar): bar is RawCandle => bar !== null)
-      .sort((a, b) => a.timestamp - b.timestamp);
-  };
-
-  const stopFeed = () => {
+  const stopFeed = useCallback(() => {
     if (wsRef.current) {
       wsRef.current.close();
       wsRef.current = null;
     }
-    setConnected(false);
-    setStatus('Bybit live feed stopped');
-  };
+    setWsConnected(false);
+    setStatus('Live feed stopped');
+  }, []);
 
-  const startFeed = async () => {
+  /* ── Start feed (sync + live) ───────────────────────────────────────────── */
+
+  const startFeed = useCallback(async () => {
+    if (apiReachable === false) {
+      setStatus('Cannot connect to Bybit');
+      return;
+    }
     if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
-      setStatus('Bybit live feed already connected');
+      setStatus('Already connected');
       return;
     }
 
     setLoading(true);
-    setStatus('Loading BTCUSDT history…');
 
     try {
-      const candles = await fetchHistory();
+      /* ── Phase 1: determine sync window ─────────────────────────────────── */
+      const nowMs = Date.now();
+      const existingCandles = baseCandles.length > 0 ? baseCandles : rawCandles;
+      let syncStartMs: number;
 
-      if (rawCandles.length === 0) {
-        setTimeframe('5m');
-        loadCandles(candles, candles[0].timestamp, candles[candles.length - 1].timestamp);
+      if (existingCandles.length > 0) {
+        // Find the last timestamp in existing data — sync from there
+        const lastTs = existingCandles.reduce((max, c) => Math.max(max, c.timestamp), 0);
+        syncStartMs = lastTs;
+        const gapHours = ((nowMs - lastTs) / (3600 * 1000)).toFixed(1);
+        setStatus(`Syncing ${gapHours}h gap…`);
       } else {
-        const currentTf = baseTimeframe ?? detectTimeframe(rawCandles);
-        const localForSync = currentTf === '5m' ? rawCandles : resampleCandles(rawCandles, '5m');
-        const localTsStart = localForSync[0]?.timestamp ?? rawCandles[0]?.timestamp ?? 0;
-        const localTsEnd = localForSync[localForSync.length - 1]?.timestamp ?? rawCandles[rawCandles.length - 1]?.timestamp ?? 0;
+        // No local data — fetch SYNC_DAYS of 1m history
+        syncStartMs = nowMs - (SYNC_DAYS * 24 * 60 * 60 * 1000);
+        setStatus(`Loading ${SYNC_DAYS} days of 1m history…`);
+      }
 
-        if (currentTf !== '5m') {
-          setTimeframe('5m');
-          loadCandles(localForSync, localTsStart, localTsEnd);
-          setStatus('Resampled local history to 5m for live sync');
+      /* ── Phase 2: paginated REST fetch ──────────────────────────────────── */
+      const newCandles = await fetchPaginatedHistory(
+        syncStartMs,
+        nowMs,
+        (pct, count) => setStatus(`Syncing… ${pct}% (${count.toLocaleString()} bars)`),
+      );
+
+      /* ── Phase 3: merge into chart ──────────────────────────────────────── */
+      if (existingCandles.length === 0) {
+        // Fresh load — set timeframe to 1m and load everything
+        setTimeframe('1m');
+        if (newCandles.length > 0) {
+          loadCandles(newCandles, newCandles[0].timestamp, newCandles[newCandles.length - 1].timestamp);
         }
+        setStatus(`Loaded ${newCandles.length.toLocaleString()} candles`);
+      } else {
+        // Merge: only append candles newer than what we have
+        const existingTimestamps = new Set(existingCandles.map(c => c.timestamp));
+        const lastExistingTs = existingCandles.reduce((max, c) => Math.max(max, c.timestamp), 0);
+        const missing = newCandles.filter(
+          c => c.timestamp > lastExistingTs && !existingTimestamps.has(c.timestamp),
+        );
 
-        const lastLocalTs = localForSync.reduce((maxTs, c) => Math.max(maxTs, c.timestamp), 0);
-        const existingTimes = new Set(localForSync.map(c => c.timestamp));
-        const missingTail = candles
-          .filter(c => c.timestamp > lastLocalTs)
-          .filter(c => !existingTimes.has(c.timestamp));
+        // Also update the last existing candle (might have been a partial bar)
+        const updatedLast = newCandles.filter(c => c.timestamp === lastExistingTs);
 
-        if (missingTail.length > 0) {
-          appendCandles(missingTail);
-          setStatus(`Synced ${missingTail.length} missing BTCUSDT 5m candles`);
+        const toAppend = [...updatedLast, ...missing];
+        if (toAppend.length > 0) {
+          appendCandles(toAppend);
+          setStatus(`Synced ${toAppend.length.toLocaleString()} candles`);
         } else {
-          const expectedNext = lastLocalTs + FIVE_MINUTES_MS;
-          const nearestLive = candles.find(c => c.timestamp >= expectedNext);
-          setStatus(nearestLive ? 'BTCUSDT history already aligned with the live chart' : 'BTCUSDT live tail is up to date');
+          setStatus('Already up to date');
         }
       }
 
+      /* ── Phase 4: open WebSocket for live updates ───────────────────────── */
       const ws = new WebSocket(WS_URL);
       wsRef.current = ws;
 
       ws.onopen = () => {
-        setConnected(true);
-        const liveStatus = rawCandles.length === 0
-          ? `Bybit live BTCUSDT 5m connected · ${candles.length} history candles`
-          : `Bybit live BTCUSDT 5m connected · history synced`;
-        setStatus(liveStatus);
+        setWsConnected(true);
+        setApiReachable(true);
+        setStatus(`Live · ${SYMBOL} · connected`);
         ws.send(JSON.stringify({
           op: 'subscribe',
-          args: ['kline.5.BTCUSDT'],
+          args: ['kline.1.BTCUSDT'],
         }));
       };
 
@@ -184,67 +292,104 @@ export const BybitLiveLoader: React.FC = () => {
         try {
           const msg = JSON.parse(evt.data) as BybitKlinePayload;
           if (!msg?.data?.length) return;
-          const latest = normalizeBybitBar(msg.data[0]);
-          if (!isValidBar(latest)) return;
-          appendCandles([latest]);
-          setStatus(`Live BTCUSDT · ${new Date(latest.timestamp).toLocaleTimeString()} · ${latest.close}`);
+          const bar = parseWsBar(msg.data[0]);
+          if (!bar) return;
+          appendCandles([bar]);
+          const price = bar.close.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+          setStatus(`Live · $${price} · ${new Date(bar.timestamp).toLocaleTimeString()}`);
         } catch {
-          // Ignore malformed frames silently.
+          // Ignore malformed frames
         }
       };
 
       ws.onerror = () => {
-        setConnected(false);
-        setStatus('✗ Bybit websocket error');
+        setWsConnected(false);
+        setStatus('WebSocket error');
       };
 
       ws.onclose = () => {
-        setConnected(false);
-        if (wsRef.current === ws) {
-          wsRef.current = null;
-        }
+        setWsConnected(false);
+        if (wsRef.current === ws) wsRef.current = null;
+        setStatus('WebSocket closed');
       };
     } catch (e) {
-      setConnected(false);
+      setWsConnected(false);
+      setApiReachable(false);
       setStatus(`✗ ${(e as Error).message}`);
     } finally {
       setLoading(false);
     }
-  };
+  }, [apiReachable, rawCandles, baseCandles, loadCandles, appendCandles, setTimeframe]);
+
+  /* ── Derived UI state ───────────────────────────────────────────────────── */
+
+  const isProbing = apiReachable === null;
+  const canClick = apiReachable === true || wsConnected;
+  const isDisabled = loading || (!canClick && !wsConnected);
+
+  // Connection indicator color
+  const dotColor = isProbing ? '#888' : apiReachable ? okColor : errorColor;
+  const dotTitle = isProbing
+    ? 'Checking Bybit connectivity…'
+    : apiReachable
+      ? (wsConnected ? 'Live WebSocket connected' : 'Bybit API reachable')
+      : 'Bybit API unreachable — check your network';
 
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
-      <button
-        onClick={connected ? stopFeed : startFeed}
-        disabled={loading}
+      {/* ── Connection status dot ─────────────────────────────────────────── */}
+      <span
+        title={dotTitle}
         style={{
-          background: connected ? accent : 'transparent',
-          color: connected ? '#fff' : text,
-          border: `1px solid ${connected ? accent : border}`,
+          display: 'inline-block',
+          width: 8,
+          height: 8,
+          borderRadius: '50%',
+          background: dotColor,
+          boxShadow: wsConnected ? `0 0 6px ${okColor}` : 'none',
+          transition: 'background 0.3s, box-shadow 0.3s',
+          flexShrink: 0,
+        }}
+      />
+
+      {/* ── Live feed button ──────────────────────────────────────────────── */}
+      <button
+        onClick={wsConnected ? stopFeed : startFeed}
+        disabled={isDisabled}
+        style={{
+          background: wsConnected ? accent : isDisabled ? disabledBg : 'transparent',
+          color: wsConnected ? '#fff' : isDisabled ? disabledText : text,
+          border: `1px solid ${wsConnected ? accent : isDisabled ? (theme === 'dark' ? '#333' : '#ccc') : border}`,
           borderRadius: 4,
           padding: '4px 8px',
           fontSize: 11,
-          cursor: loading ? 'wait' : 'pointer',
+          cursor: isDisabled ? 'not-allowed' : 'pointer',
           whiteSpace: 'nowrap',
+          opacity: isDisabled && !loading ? 0.5 : 1,
+          transition: 'all 0.2s',
         }}
-        title="Load local 5m history first, then connect to the public Bybit BTCUSDT perpetual live feed"
+        title={
+          isDisabled && !loading
+            ? 'Bybit is unreachable — live feed unavailable'
+            : wsConnected
+              ? 'Click to disconnect live feed'
+              : 'Sync missing data and connect live 1m feed'
+        }
       >
-        {loading ? '⏳' : connected ? '■' : '◉'} {connected ? 'Live' : 'Live Feed'}
+        {loading ? '⏳ Syncing…' : wsConnected ? '■ Live' : '◉ Live Feed'}
       </button>
 
-      <span style={{ color: text, fontSize: 10, opacity: 0.7 }}>
-        Load 5m history first, then sync the live tail
-      </span>
-
+      {/* ── Status text ───────────────────────────────────────────────────── */}
       {status && (
         <span
           style={{
-            color: status.startsWith('✗') ? errorColor : connected ? okColor : text,
+            color: status.startsWith('✗') ? errorColor : wsConnected ? okColor : text,
             fontSize: 11,
-            maxWidth: 340,
+            maxWidth: 380,
             overflow: 'hidden',
             textOverflow: 'ellipsis',
             whiteSpace: 'nowrap',
+            opacity: 0.85,
           }}
         >
           {status}

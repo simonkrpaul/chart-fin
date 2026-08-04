@@ -22,6 +22,9 @@ const QUICK_DATASETS: QuickDataset[] = [
   { label: 'BTC 5m', url: '/data/btc_5m.csv', symbol: 'BTC/USD', hint: 'Loads 5m data — switch any TF to auto-resample' },
   { label: 'BTC 1d', url: '/data/btc_1d.csv', symbol: 'BTC/USD' },
   { label: 'BTC 1h', url: '/data/btc_1h.csv', symbol: 'BTC/USD', hint: 'Loads 1h — resample to 4h/1d/1w/1M' },
+  { label: 'Bybit 1m', url: '/data/bybit_btcusdt_1m.csv', symbol: 'BTCUSDT', hint: 'Bybit synced 1m data — run scripts/bybit_sync.py first' },
+  { label: 'Bybit 1h', url: '/data/bybit_btcusdt_1h.csv', symbol: 'BTCUSDT', hint: 'Bybit synced 1h data' },
+  { label: 'Bybit 1d', url: '/data/bybit_btcusdt_1d.csv', symbol: 'BTCUSDT', hint: 'Bybit synced daily data' },
 ];
 
 export const RemoteLoader: React.FC = () => {
