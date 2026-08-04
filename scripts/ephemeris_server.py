@@ -65,7 +65,7 @@ except ImportError:
 
 # Try common ephemeris file paths
 EPHE_PATHS = [
-    r'/Users/rajanpsi/repos/personal/swisseph/ephe',
+    os.path.expanduser('~/Dev/swisseph/ephe'),
     os.path.expanduser('~/swisseph/ephe'),
     '/usr/local/share/swisseph/ephe',
     '/usr/share/swisseph/ephe',

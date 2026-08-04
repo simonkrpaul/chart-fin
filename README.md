@@ -4,33 +4,50 @@ A professional financial charting application with candlestick charts, technical
 
 ## Prerequisites
 
-- **Node.js** managed via [nvm](https://github.com/nvm-sh/nvm)
+- **Node.js** (v18+) — managed via [nvm](https://github.com/nvm-sh/nvm) (Linux/macOS) or [nvm-windows](https://github.com/coreybutler/nvm-windows) (Windows)
 - **pnpm** package manager
 
-> Node.js is not on the system PATH by default — you must activate it via nvm first.
+---
 
-## Getting started
+## Getting Started — Linux / macOS
 
-### 1. Activate Node.js
+### 1. Install Node.js via nvm
 
 ```bash
-export NVM_DIR="$HOME/.nvm"
-source "$(brew --prefix nvm)/nvm.sh"
-nvm use node
+# Install nvm (if not already installed)
+curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.1/install.sh | bash
+
+# Reload shell
+source ~/.bashrc   # or ~/.zshrc on macOS
+
+# Install and use latest LTS
+nvm install --lts
+nvm use --lts
 ```
 
-Or add the lines above to your `~/.zshrc` so Node is available in every new terminal session.
+### 2. Install pnpm
 
-### 2. Install dependencies (first time only)
+```bash
+npm install -g pnpm
+```
+
+### 3. Clone the repository
+
+```bash
+git clone <repo-url> chart-fin
+cd chart-fin
+```
+
+### 4. Install dependencies
 
 ```bash
 pnpm install
 ```
 
-### 3. Start the dev server
+### 5. Start the dev server
 
 ```bash
-./node_modules/.bin/vite
+pnpm dev
 ```
 
 The app will be available at **http://localhost:5173**
@@ -38,16 +55,89 @@ The app will be available at **http://localhost:5173**
 To expose it on the local network (e.g. access from another device):
 
 ```bash
-./node_modules/.bin/vite --host
+pnpm dev -- --host
 ```
 
-### 4. Production build
+### 6. Production build
 
 ```bash
-./node_modules/.bin/vite build
+pnpm build
 ```
 
-Output goes to `dist/`.
+Output goes to `dist/`. Preview the production build with:
+
+```bash
+pnpm preview
+```
+
+---
+
+## Getting Started — Windows
+
+### 1. Install Node.js via nvm-windows
+
+1. Download the installer from [nvm-windows releases](https://github.com/coreybutler/nvm-windows/releases).
+2. Run the installer (accept defaults).
+3. Open a **new** Command Prompt or PowerShell and run:
+
+```cmd
+nvm install lts
+nvm use lts
+node --version
+```
+
+### 2. Install pnpm
+
+```cmd
+npm install -g pnpm
+```
+
+### 3. Clone the repository
+
+```cmd
+git clone <repo-url> chart-fin
+cd chart-fin
+```
+
+### 4. Install dependencies
+
+```cmd
+pnpm install
+```
+
+### 5. Start the dev server
+
+```cmd
+pnpm dev
+```
+
+The app will be available at **http://localhost:5173**
+
+To expose it on the local network:
+
+```cmd
+pnpm dev -- --host
+```
+
+### 6. Production build
+
+```cmd
+pnpm build
+```
+
+Output goes to `dist\`. Preview the production build with:
+
+```cmd
+pnpm preview
+```
+
+### Troubleshooting (Windows)
+
+- **"pnpm is not recognized"** — Close and reopen your terminal after installing pnpm, or add `%APPDATA%\npm` to your PATH.
+- **Long path errors** — Enable long paths: run `git config --system core.longpaths true` in an admin terminal.
+- **Permission errors** — Run PowerShell as Administrator, or use `Set-ExecutionPolicy RemoteSigned -Scope CurrentUser`.
+
+---
 
 ---
 
@@ -109,6 +199,137 @@ After generating the files, open the app and either:
 
 - Click **↑ Load data** in the toolbar and pick a file from `public/data/`, **or**
 - Use the **Remote Loader** quick-load button (pre-wired to `/data/btc_1d.csv`).
+
+---
+
+## Swiss Ephemeris (swisseph) Setup
+
+The ephemeris server (`scripts/ephemeris_server.py`) uses [pyswisseph](https://pypi.org/project/pyswisseph/) which requires the Swiss Ephemeris library and data files.
+
+### Python binding (all platforms)
+
+```bash
+pip install pyswisseph
+```
+
+This installs the pre-built wheel which includes the C library. If no wheel is available for your platform, you'll need the C library installed first (see below).
+
+### Ephemeris data files
+
+Download the planetary ephemeris files from the official repository:
+
+```bash
+git clone https://github.com/aloistr/swisseph.git
+```
+
+The data files are in the `ephe/` folder. Copy them to a location the library can find:
+
+| Platform | Default search path |
+|----------|-------------------|
+| **Windows** | `C:\sweph\ephe` |
+| **Linux / macOS** | `.:/users/ephe2/:/users/ephe/` |
+
+Or set a custom path in your code with `swe_set_ephe_path()` / environment variable.
+
+---
+
+### Linux setup
+
+#### Install build dependencies (if building from source)
+
+```bash
+# Debian / Ubuntu
+sudo apt-get install build-essential gcc make
+
+# Fedora / RHEL
+sudo dnf install gcc make
+```
+
+#### Build the C library from source
+
+```bash
+git clone https://github.com/aloistr/swisseph.git
+cd swisseph
+make
+```
+
+This produces:
+- `libswe.a` — static library
+- `libswe.so` — shared library
+- `swetest` — command-line test tool
+
+#### Install the shared library system-wide (optional)
+
+```bash
+sudo cp libswe.so /usr/local/lib/
+sudo ldconfig
+```
+
+#### Set up ephemeris data files
+
+```bash
+sudo mkdir -p /users/ephe
+sudo cp ephe/*.se1 /users/ephe/
+```
+
+Or use a custom path:
+
+```bash
+mkdir -p ~/sweph/ephe
+cp ephe/*.se1 ~/sweph/ephe/
+export SE_EPHE_PATH=~/sweph/ephe
+```
+
+---
+
+### Windows setup
+
+#### Option A — Pre-built DLLs
+
+1. Clone or download the repository:
+   ```
+   git clone https://github.com/aloistr/swisseph.git
+   ```
+2. Extract `windows/sweph.zip` — it contains pre-built 32-bit and 64-bit DLLs in `sweph/bin/`.
+3. Copy the appropriate DLL (`swedll32.dll` or `swedll64.dll`) to your project or system PATH.
+
+#### Option B — Build from source with Visual Studio
+
+1. Open the solution/project files in `windows/sweph.zip → sweph/src/projects/`.
+2. Build the desired configuration (Release x64 recommended).
+
+#### Option C — Build with MinGW / MSYS2
+
+```bash
+pacman -S mingw-w64-x86_64-gcc make
+cd swisseph
+make
+```
+
+#### Set up ephemeris data files
+
+```cmd
+mkdir C:\sweph\ephe
+copy ephe\*.se1 C:\sweph\ephe\
+```
+
+Or set the environment variable:
+
+```cmd
+set SE_EPHE_PATH=C:\path\to\your\ephe
+```
+
+---
+
+### Verify the installation
+
+```bash
+# Test the C library
+./swetest -p0 -b1.1.2025 -fPl -head
+
+# Test pyswisseph
+python3 -c "import swisseph as swe; swe.set_ephe_path('./ephe'); print(swe.calc_ut(2460676.5, 0))"
+```
 
 ---
 
