@@ -202,6 +202,65 @@ After generating the files, open the app and either:
 
 ---
 
+## Bybit Live Data Sync
+
+The app can stream real-time BTCUSDT data from the [Bybit](https://bybit.com) public API.
+There are two approaches: a **backend Python sync** for bulk historical data (5 years),
+and a **frontend live feed** for real-time updates.
+
+### Prerequisites
+
+```bash
+pip install pandas requests
+```
+
+### Backend sync (5 years of 1-minute candles)
+
+The `scripts/bybit_sync.py` script downloads full BTCUSDT 1-minute history from Bybit
+and saves it to `public/data/`. On the first run it fetches up to 5 years; on subsequent
+runs it only fetches the gap since the last sync.
+
+```bash
+# Full sync (first time — takes ~20-40 minutes for 5 years)
+python scripts/bybit_sync.py
+
+# After being offline for a week — only syncs the missing gap
+python scripts/bybit_sync.py
+
+# Custom history depth (e.g. 2 years)
+python scripts/bybit_sync.py --years 2
+```
+
+Output files written to `public/data/`:
+
+| File | Timeframe |
+|------|-----------|
+| `bybit_btcusdt_1m.csv` | 1-minute |
+| `bybit_btcusdt_5m.csv` | 5-minute |
+| `bybit_btcusdt_1h.csv` | 1-hour |
+| `bybit_btcusdt_1d.csv` | 1-day |
+| `bybit_btcusdt_1w.csv` | 1-week |
+
+Load these via the **Remote Loader** buttons (`Bybit 1m`, `Bybit 1h`, `Bybit 1d`) in the toolbar.
+
+### Frontend live feed
+
+Click the **◉ Live Feed** button in the toolbar. The live feed has three phases:
+
+1. **Connection probe** — checks if Bybit API is reachable (green/red dot indicator).
+2. **Gap sync** — paginated REST fetch fills any missing 1-minute candles since last session.
+3. **WebSocket stream** — real-time 1m candle updates via `wss://stream.bybit.com`.
+
+**Connection indicator:**
+- 🟢 Green dot = Bybit reachable, click to connect
+- 🔴 Red dot = Bybit unreachable, button is greyed out and disabled
+- Glow effect = WebSocket actively streaming
+
+When the dev server has been offline (e.g. a weekend), clicking **Live Feed** on Monday
+will automatically sync all missing candles before connecting the live stream.
+
+---
+
 ## Swiss Ephemeris (swisseph) Setup
 
 The ephemeris server (`scripts/ephemeris_server.py`) uses [pyswisseph](https://pypi.org/project/pyswisseph/) which requires the Swiss Ephemeris library and data files.
