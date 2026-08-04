@@ -178,7 +178,10 @@ def resample(df: pd.DataFrame, rule: str) -> pd.DataFrame:
         "close": "last",
         "volume": "sum",
     }).dropna(subset=["open"])
-    ohlcv["timestamp"] = (ohlcv.index.astype("int64") // 10**6).astype("int64")
+    # Preserve the true millisecond epoch from the resampled datetime index.
+    # Dividing by 10**6 collapses the 13-digit Unix ms value into a 7-digit
+    # seconds-like value and breaks the frontend timestamp contract.
+    ohlcv["timestamp"] = ohlcv.index.astype("int64")
     return ohlcv[["timestamp", "open", "high", "low", "close", "volume"]].reset_index(drop=True)
 
 
