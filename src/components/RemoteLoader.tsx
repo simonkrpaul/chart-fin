@@ -8,7 +8,7 @@
 import React, { useState } from 'react';
 import { useChartStore } from '../store/chartStore';
 import { parseOHLCVFile, detectTimeframe } from '../utils/dataParser';
-import { saveDataset, clearPersisted } from '../db/persistence';
+import { saveDataset, clearDataset, clearPersisted } from '../db/persistence';
 
 interface QuickDataset {
   label: string;
@@ -18,13 +18,17 @@ interface QuickDataset {
 }
 
 const QUICK_DATASETS: QuickDataset[] = [
-  { label: 'BTC 1m', url: '/data/btc_1m.csv', symbol: 'BTC/USD', hint: 'Loads 1m data — resample to any higher TF' },
-  { label: 'BTC 5m', url: '/data/btc_5m.csv', symbol: 'BTC/USD', hint: 'Loads 5m data — switch any TF to auto-resample' },
-  { label: 'BTC 1d', url: '/data/btc_1d.csv', symbol: 'BTC/USD' },
-  { label: 'BTC 1h', url: '/data/btc_1h.csv', symbol: 'BTC/USD', hint: 'Loads 1h — resample to 4h/1d/1w/1M' },
   { label: 'Bybit 1m', url: '/data/bybit_btcusdt_1m.csv', symbol: 'BTCUSDT', hint: 'Bybit synced 1m data — run scripts/bybit_sync.py first' },
+  { label: 'Bybit 5m', url: '/data/bybit_btcusdt_5m.csv', symbol: 'BTCUSDT', hint: 'Bybit synced 5m data' },
   { label: 'Bybit 1h', url: '/data/bybit_btcusdt_1h.csv', symbol: 'BTCUSDT', hint: 'Bybit synced 1h data' },
   { label: 'Bybit 1d', url: '/data/bybit_btcusdt_1d.csv', symbol: 'BTCUSDT', hint: 'Bybit synced daily data' },
+];
+
+const KAGGLE_DATASETS: QuickDataset[] = [
+  { label: 'Kaggle 1m', url: '/data/btc_1m.csv', symbol: 'BTC/USD', hint: 'Kaggle 1m data — resample to any higher TF' },
+  { label: 'Kaggle 5m', url: '/data/btc_5m.csv', symbol: 'BTC/USD', hint: 'Kaggle 5m data — switch any TF to auto-resample' },
+  { label: 'Kaggle 1h', url: '/data/btc_1h.csv', symbol: 'BTC/USD', hint: 'Kaggle 1h — resample to 4h/1d/1w/1M' },
+  { label: 'Kaggle 1d', url: '/data/btc_1d.csv', symbol: 'BTC/USD' },
 ];
 
 export const RemoteLoader: React.FC = () => {
@@ -70,7 +74,8 @@ export const RemoteLoader: React.FC = () => {
 
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-      <span style={{ color: text, fontSize: 11, opacity: 0.6 }}>Quick load:</span>
+      {/* Bybit datasets (primary) */}
+      <span style={{ color: text, fontSize: 11, opacity: 0.6 }}>Bybit:</span>
       {QUICK_DATASETS.map(ds => (
         <button
           key={ds.url}
@@ -91,6 +96,32 @@ export const RemoteLoader: React.FC = () => {
           {loading === ds.label ? '⏳' : ''}{ds.label}
         </button>
       ))}
+
+      <div style={{ width: 1, height: 20, background: border, margin: '0 4px' }} />
+
+      {/* Kaggle datasets (secondary) */}
+      <span style={{ color: text, fontSize: 11, opacity: 0.4 }}>Kaggle:</span>
+      {KAGGLE_DATASETS.map(ds => (
+        <button
+          key={ds.url}
+          disabled={loading !== null}
+          onClick={() => loadDataset(ds)}
+          title={ds.hint}
+          style={{
+            background: 'transparent',
+            color: loading === ds.label ? '#2962ff' : text,
+            border: `1px solid ${border}`,
+            borderRadius: 4,
+            padding: '4px 8px',
+            fontSize: 11,
+            cursor: loading !== null ? 'wait' : 'pointer',
+            opacity: loading !== null && loading !== ds.label ? 0.4 : 0.7,
+          }}
+        >
+          {loading === ds.label ? '⏳' : ''}{ds.label}
+        </button>
+      ))}
+
       {status && (
         <span style={{ fontSize: 11, color: isError ? errorColor : okColor, maxWidth: 300, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
           {status}
@@ -101,8 +132,8 @@ export const RemoteLoader: React.FC = () => {
 
       {/* Clear persisted data */}
       <button
-        title="Clear all saved preferences and reload the page"
-        onClick={() => { clearPersisted(); window.location.reload(); }}
+        title="Clear saved dataset — stops old data from auto-loading on refresh"
+        onClick={() => { clearDataset(); setStatus('Dataset cleared'); }}
         style={{
           background: 'transparent',
           color: text,
@@ -114,7 +145,23 @@ export const RemoteLoader: React.FC = () => {
           opacity: 0.6,
         }}
       >
-        ✕ Reset
+        ✕ Clear Data
+      </button>
+      <button
+        title="Clear all saved preferences and reload the page"
+        onClick={() => { clearPersisted(); window.location.reload(); }}
+        style={{
+          background: 'transparent',
+          color: text,
+          border: `1px solid ${border}`,
+          borderRadius: 4,
+          padding: '4px 8px',
+          fontSize: 11,
+          cursor: 'pointer',
+          opacity: 0.4,
+        }}
+      >
+        ⟳ Reset All
       </button>
     </div>
   );

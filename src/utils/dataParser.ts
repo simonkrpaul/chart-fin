@@ -82,8 +82,17 @@ function parseCSV(text: string, filename: string): ParseResult {
   const cCol   = col(['close','c','weighted_price']); // weighted_price as close fallback for Kaggle BTC
   const vCol   = col(['volume','vol','v','volume_(btc)','volume_btc','volume_(currency)']);  // Kaggle BTC has volume_(btc)
   const symCol = col(['symbol','ticker','sym']);
+  const priceCol = col(['price','p','px','last','trade_price']);
 
   if (tsCol === -1) { return { candles: [], errors: ['No timestamp column found. Expected one of: timestamp, time, date, datetime, t'] }; }
+
+  // ── Tick/trade data detection ─────────────────────────────────────────────
+  // If we have a 'price' column but no OHLC columns, this is tick data.
+  // Aggregate ticks into 1-minute OHLCV candles in-browser.
+  if (priceCol !== -1 && oCol === -1 && hCol === -1 && lCol === -1 && cCol === -1) {
+    return parseTicksToOHLCV(lines, delim, tsCol, priceCol, vCol, symCol);
+  }
+
   if (oCol  === -1) { return { candles: [], errors: ['No open column found.'] }; }
   if (hCol  === -1) { return { candles: [], errors: ['No high column found.'] }; }
   if (lCol  === -1) { return { candles: [], errors: ['No low column found.'] }; }
@@ -146,6 +155,95 @@ function splitCSVRow(line: string, delim: string): string[] {
   }
   result.push(cur);
   return result;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Tick data → 1-minute OHLCV aggregation
+// ─────────────────────────────────────────────────────────────────────────────
+
+const ONE_MINUTE_MS = 60_000;
+
+function parseTicksToOHLCV(
+  lines: string[],
+  delim: string,
+  tsCol: number,
+  priceCol: number,
+  volCol: number,
+  symCol: number,
+): ParseResult {
+  const errors: string[] = [];
+
+  // Parse all ticks
+  interface Tick { ts: number; price: number; volume: number; }
+  const ticks: Tick[] = [];
+
+  for (let i = 1; i < lines.length; i++) {
+    const row = splitCSVRow(lines[i], delim);
+    const cell = (idx: number) => idx >= 0 ? row[idx]?.trim().replace(/^["']|["']$/g, '') : '';
+
+    const tsRaw = cell(tsCol);
+    const ts = parseTimestamp(tsRaw);
+    if (ts === null || ts < EARLIEST_ACCEPTABLE_TS) continue;
+
+    const price = parseFloat(cell(priceCol));
+    if (isNaN(price) || price <= 0) continue;
+
+    const volume = volCol !== -1 ? (parseFloat(cell(volCol)) || 0) : 0;
+    ticks.push({ ts, price, volume });
+  }
+
+  if (ticks.length === 0) {
+    return { candles: [], errors: ['No valid ticks found in file.'] };
+  }
+
+  // Sort by timestamp
+  ticks.sort((a, b) => a.ts - b.ts);
+
+  // Aggregate into 1-minute buckets
+  const candles: RawCandle[] = [];
+  let bucketStart = Math.floor(ticks[0].ts / ONE_MINUTE_MS) * ONE_MINUTE_MS;
+  let open = ticks[0].price;
+  let high = ticks[0].price;
+  let low = ticks[0].price;
+  let close = ticks[0].price;
+  let vol = ticks[0].volume;
+
+  for (let i = 1; i < ticks.length; i++) {
+    const tick = ticks[i];
+    const tickBucket = Math.floor(tick.ts / ONE_MINUTE_MS) * ONE_MINUTE_MS;
+
+    if (tickBucket !== bucketStart) {
+      // Emit the completed candle
+      candles.push({ timestamp: bucketStart, open, high, low, close, volume: vol });
+
+      // Start new bucket
+      bucketStart = tickBucket;
+      open = tick.price;
+      high = tick.price;
+      low = tick.price;
+      close = tick.price;
+      vol = tick.volume;
+    } else {
+      // Update current bucket
+      if (tick.price > high) high = tick.price;
+      if (tick.price < low) low = tick.price;
+      close = tick.price;
+      vol += tick.volume;
+    }
+  }
+  // Emit last bucket
+  candles.push({ timestamp: bucketStart, open, high, low, close, volume: vol });
+
+  // Try to extract symbol from first row
+  let symbol: string | undefined;
+  if (symCol !== -1) {
+    const firstRow = splitCSVRow(lines[1], delim);
+    symbol = firstRow[symCol]?.trim().replace(/^["']|["']$/g, '') || undefined;
+  }
+
+  errors.push(`Aggregated ${ticks.length.toLocaleString()} ticks → ${candles.length.toLocaleString()} 1-minute candles`);
+
+  return { candles, errors, symbol };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

@@ -77,6 +77,11 @@ export function loadDataset(): StoredDataset | null {
   }
 }
 
+/** Clear only the persisted dataset URL (stops auto-reload of old data on refresh). */
+export function clearDataset(): void {
+  localStorage.removeItem(KEY_DATASET);
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Clear all persisted data
 // ─────────────────────────────────────────────────────────────────────────────
