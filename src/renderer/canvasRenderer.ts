@@ -1517,7 +1517,7 @@ function _renderOverlayCandles(
   ctx: CanvasRenderingContext2D,
   ov: OffsetOverlay,
   vp: { firstSlotIndex: number; visibleSlotCount: number; mainPaneHeight: number },
-  ps: { min: number; max: number },
+  ps: PriceScale,
   ph: number,
   sw: number,
   bodyW: number,
@@ -2740,7 +2740,7 @@ export function renderEphemerisMarkers(
 ): void {
   if (markers.length === 0) return;
   const { ctx, viewport: vp } = rc;
-  const height = vp.height;
+  const height = vp.mainPaneHeight + vp.subPaneHeight;
   const sw = slotWidth(vp);
 
   ctx.save();

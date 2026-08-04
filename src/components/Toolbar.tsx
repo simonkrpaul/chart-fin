@@ -5,6 +5,7 @@ import React, { useCallback } from 'react';
 import { useChartStore } from '../store/chartStore';
 import { DataLoader } from './DataLoader';
 import { RemoteLoader } from './RemoteLoader';
+import { BybitLiveLoader } from './BybitLiveLoader';
 import { LayoutManager } from './LayoutManager';
 import { LayoutSelector } from './LayoutSelector';
 import { TimezoneSelector } from './TimezoneSelector';
@@ -151,6 +152,11 @@ export const Toolbar: React.FC = () => {
 
       {/* Remote / pre-generated datasets */}
       <RemoteLoader />
+
+      <div style={{ width: 1, height: 20, background: border, margin: '0 6px' }} />
+
+      {/* Live Bybit BTCUSDT perpetual feed */}
+      <BybitLiveLoader />
 
       <div style={{ width: 1, height: 20, background: border, margin: '0 6px' }} />
 

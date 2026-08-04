@@ -586,7 +586,7 @@ function executeTrades(
         // overlay_swing_close: exit at the VERY NEXT swing of ANY type.
         // Entry fires on close crossing ANY pivot level; the ZigZag alternates
         // H→L→H, so the next pivot after entry is whichever type appears first.
-        const exitSig = open.direction === 'long' ? 'sell' : 'buy';
+        const exitSig: BacktestSignal['type'] = open.direction === 'long' ? 'sell' : 'buy';
         closePosition(candle.close, slot.timestamp, slot.slotIndex, i, 'signal');
         if (sig !== exitSig) {
           backtestSignals.push({ slotIndex: slot.slotIndex, timestamp: slot.timestamp, type: exitSig, price: candle.close, strategyId: config.strategyId });
@@ -687,7 +687,7 @@ function executeTrades(
     const canOpenShort = sig === 'sell' && canShort;
     const justClosed = !open && trades.length > 0 && trades[trades.length - 1].exitSlotIndex === slot.slotIndex;
     if (!open && (canOpenLong || canOpenShort) && !(isNy10am && justClosed)) {
-      const direction = sig === 'buy' ? 'long' : 'short';
+      const direction: 'long' | 'short' = sig === 'buy' ? 'long' : 'short';
       let swingStopLevel: number | undefined;
       if (config.strategyId === 'overlay_swing_close') {
         // Stop = the exact swing price that was the watch level (most recent swing before entry)
@@ -871,6 +871,7 @@ export function runBacktest(
       profitFactor: 0, expectancyPct: 0,
       sharpeRatio: 0, sortinoRatio: 0, cagrPct: null,
       avgBarsInTrade: 0, maxBarsInTrade: 0, minBarsInTrade: 0,
+      tpExits: 0, slExits: 0, signalExits: 0, eodExits: 0,
       trades: [], equityCurve: [],
     };
     return { stats: empty, signals: [] };
