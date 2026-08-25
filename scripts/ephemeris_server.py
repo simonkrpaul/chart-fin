@@ -34,6 +34,18 @@ Endpoints:
         "location": { "lat": 28.6139, "lon": 77.2090 },
         "ayanamsa": "Lahiri"
       }
+
+    POST /api/ephemeris/retrograde
+        Request body:
+            {
+                "start_date": "2025-01-01",
+                "end_date": "2025-12-31",
+                "planets": ["Mercury", "Venus"],
+                "ayanamsa": "Lahiri",
+                "step_hours": 6
+            }
+        Response:
+            { "planets": { "Mercury": { "zones": [{ "entry_ts": ..., "exit_ts": ... }] } } }
     Response:
       {
         "dates": [
@@ -299,6 +311,60 @@ def find_rising_dates():
         current += step
 
     return jsonify({'dates': results})
+
+
+@app.route('/api/ephemeris/retrograde', methods=['POST'])
+def find_retrograde_periods():
+    """Find periods where selected geocentric planets have negative longitude speed."""
+    body = request.get_json(force=True)
+    start = parse_date(body['start_date'])
+    end = parse_date(body['end_date'])
+    requested = body.get('planets', [])
+    if isinstance(requested, str):
+        requested = [requested]
+    planets = [name for name in requested if name in PLANETS and name not in ('Sun', 'Moon', 'Rahu', 'True Rahu')]
+    if not planets:
+        return jsonify({'error': 'Select at least one planet that can be retrograde'}), 400
+
+    ayanamsa = body.get('ayanamsa', 'Lahiri')
+    sidereal = ayanamsa != 'Tropical'
+    if sidereal:
+        swe.set_sid_mode(AYANAMSAS.get(ayanamsa, swe.SIDM_LAHIRI), 0, 0)
+    step_hours = max(1, int(body.get('step_hours', 6)))
+    step = timedelta(hours=step_hours)
+    result = {}
+
+    for planet_name in planets:
+        current = start
+        in_retrograde = False
+        entry_dt = None
+        zones = []
+        while current <= end:
+            jd = datetime_to_jd(current)
+            flags = swe.FLG_SWIEPH | swe.FLG_SPEED
+            if sidereal:
+                flags |= swe.FLG_SIDEREAL
+            position = swe.calc_ut(jd, PLANETS[planet_name], flags)[0]
+            is_retrograde = position[3] < 0
+            if is_retrograde and not in_retrograde:
+                entry_dt = current
+                in_retrograde = True
+            elif not is_retrograde and in_retrograde and entry_dt:
+                zones.append({
+                    'entry_ts': int(entry_dt.timestamp() * 1000),
+                    'exit_ts': int(current.timestamp() * 1000),
+                })
+                in_retrograde = False
+                entry_dt = None
+            current += step
+        if in_retrograde and entry_dt:
+            zones.append({
+                'entry_ts': int(entry_dt.timestamp() * 1000),
+                'exit_ts': int(current.timestamp() * 1000),
+            })
+        result[planet_name] = {'zones': zones}
+
+    return jsonify({'planets': result})
 
 
 @app.route('/api/ephemeris/planets', methods=['GET'])

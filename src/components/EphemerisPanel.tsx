@@ -12,6 +12,9 @@ const PLANETS = [
   'Rahu', 'True Rahu', 'Ketu',
 ];
 
+const RETROGRADE_PLANETS = ['Mercury', 'Venus', 'Mars', 'Jupiter', 'Saturn', 'Uranus', 'Neptune', 'Pluto'];
+const RETROGRADE_COLORS = ['#ff9800', '#26c6da', '#ef5350', '#ab47bc', '#66bb6a', '#42a5f5', '#ec407a', '#8d6e63'];
+
 const ASPECTS = [
   { label: 'Conjunction (0°)', value: 0 },
   { label: 'Sextile (60°)', value: 60 },
@@ -69,7 +72,8 @@ export const EphemerisPanel: React.FC = () => {
   const [color, setColor] = useState(MARKER_COLORS[0]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
-  const [mode, setMode] = useState<'aspect' | 'rising'>('aspect');
+  const [mode, setMode] = useState<'aspect' | 'rising' | 'retrograde'>('aspect');
+  const [retrogradePlanets, setRetrogradePlanets] = useState<string[]>(['Mercury']);
 
   // Date range state
   const [startDate, setStartDate] = useState(yearsAgo(1));
@@ -173,6 +177,37 @@ export const EphemerisPanel: React.FC = () => {
     }
   }
 
+  async function fetchRetrogradePeriods() {
+    if (!startDate || !endDate || retrogradePlanets.length === 0) { setError('Select at least one planet and date range'); return; }
+
+    setLoading(true);
+    setError('');
+    try {
+      const resp = await fetch(`${API_BASE}/api/ephemeris/retrograde`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ start_date: startDate, end_date: endDate, planets: retrogradePlanets, ayanamsa, step_hours: 6 }),
+      });
+      if (!resp.ok) throw new Error(`Server error ${resp.status}`);
+      const data = await resp.json();
+      retrogradePlanets.forEach((planet, index) => {
+        const zones = data.planets?.[planet]?.zones || [];
+        if (zones.length > 0) {
+          addTransitZoneGroup({
+            label: `${planet} Retrograde`, direction: 'DOWN', probability: '',
+            color: RETROGRADE_COLORS[index % RETROGRADE_COLORS.length], visible: true,
+            zones: zones.map((z: any) => ({ entryTimestamp: z.entry_ts, exitTimestamp: z.exit_ts, entrySlotIndex: 0, exitSlotIndex: 0 })),
+          });
+        }
+      });
+      if (!retrogradePlanets.some(planet => (data.planets?.[planet]?.zones || []).length > 0)) setError('No retrograde periods found in date range');
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setLoading(false);
+    }
+  }
+
   // Sort markers newest first for display
   const sortedMarkers = [...ephemerisMarkers].sort((a, b) => b.timestamp - a.timestamp);
 
@@ -201,6 +236,12 @@ export const EphemerisPanel: React.FC = () => {
           style={{ ...inp, background: mode === 'rising' ? '#2962ff' : subtle, color: mode === 'rising' ? '#fff' : text, cursor: 'pointer', textAlign: 'center' as const }}
         >
           Rising
+        </button>
+        <button
+          onClick={() => setMode('retrograde')}
+          style={{ ...inp, background: mode === 'retrograde' ? '#2962ff' : subtle, color: mode === 'retrograde' ? '#fff' : text, cursor: 'pointer', textAlign: 'center' as const }}
+        >
+          Retrograde
         </button>
       </div>
 
@@ -268,6 +309,24 @@ export const EphemerisPanel: React.FC = () => {
         </div>
       )}
 
+      {mode === 'retrograde' && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
+          <label style={{ fontSize: 10, opacity: 0.7 }}>Planets</label>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 3 }}>
+            {RETROGRADE_PLANETS.map(planet => (
+              <label key={planet} style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 10, cursor: 'pointer' }}>
+                <input
+                  type="checkbox"
+                  checked={retrogradePlanets.includes(planet)}
+                  onChange={() => setRetrogradePlanets(current => current.includes(planet) ? current.filter(p => p !== planet) : [...current, planet])}
+                />
+                {planet}
+              </label>
+            ))}
+          </div>
+        </div>
+      )}
+
       {/* Common controls */}
       <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginTop: 8, borderTop: `1px solid ${border}`, paddingTop: 8 }}>
         <div style={{ display: 'flex', gap: 4 }}>
@@ -299,7 +358,7 @@ export const EphemerisPanel: React.FC = () => {
         </div>
 
         <button
-          onClick={mode === 'aspect' ? fetchAspectDates : fetchRisingDates}
+          onClick={mode === 'aspect' ? fetchAspectDates : mode === 'rising' ? fetchRisingDates : fetchRetrogradePeriods}
           disabled={loading}
           style={{
             background: '#2962ff', color: '#fff', border: 'none', borderRadius: 4,
