@@ -499,6 +499,13 @@ export interface ChartLayout {
   id: string;
   name: string;
   timeframe: Timeframe;
+  /** Series that was open when this layout was saved. Optional for older records. */
+  series?: {
+    market: string;
+    symbol: string;
+    timeframe: Timeframe;
+    sourceTimeframe?: Timeframe;
+  };
   drawings: Drawing[];
   indicators: IndicatorConfig[];
   overlays: OffsetOverlayConfig[];

@@ -11,6 +11,7 @@ import { useChartStore, ChartStoreContext, primaryChartStore } from './store/cha
 import { useLayoutStore, LAYOUT_PANEL_IDS } from './store/layoutStore';
 import { ChartCanvas } from './components/ChartCanvas';
 import { Toolbar } from './components/Toolbar';
+import { IngestProgressBadge } from './components/IngestProgressBadge';
 import { CandleTooltip } from './components/CandleTooltip';
 import { ChartControls } from './components/ChartControls';
 import { ReplayControls } from './components/ReplayControls';
@@ -27,6 +28,13 @@ import { LayoutGrid } from './components/LayoutGrid';
 import { useResizeObserver } from './hooks/useResizeObserver';
 import { useKeyboardShortcuts } from './hooks/useKeyboardShortcuts';
 import { usePersistence } from './hooks/usePersistence';
+import { useLazyBackfill } from './hooks/useLazyBackfill';
+import { requestPersistentStorage } from './db/marketStore';
+import { restoreLastSession, markBootReady } from './store/chartSession';
+import { ensureMarkets, ingestManifest } from './db/marketDb';
+
+// Guards against React 19 StrictMode double-invocation of the boot effect.
+let _bootRan = false;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Inner component – rendered inside the active panel's ChartStoreContext so
@@ -39,6 +47,36 @@ function AppInner() {
   const singlePanel = layoutType === '1';
   const { ref, width, height } = useResizeObserver<HTMLDivElement>();
   useKeyboardShortcuts();
+  useLazyBackfill();
+
+  // Ask the browser to mark chart-fin-db as persistent so it survives eviction.
+  useEffect(() => { void requestPersistentStorage(); }, []);
+
+  // Boot: seed markets, restore last session immediately. The manifest
+  // ingest runs in the background so a fresh clone with 500 CSVs doesn't
+  // block first paint. Module-level flag guards against React 19 StrictMode
+  // double-invocation in dev (otherwise we'd fire two concurrent ingests
+  // and two concurrent series loads).
+  useEffect(() => {
+    if (_bootRan) return;
+    _bootRan = true;
+    (async () => {
+      await ensureMarkets();
+      await restoreLastSession();
+      markBootReady();
+      // Only start the background manifest ingest AFTER the initial series
+      // is loaded. Otherwise IDB write contention makes the first chart
+      // paint 3–4× slower on machines with 500+ series to sync.
+      // Small idle-callback so React commits + first paint happen first.
+      const kick = () => { void ingestManifest(undefined, { background: true }); };
+      if ('requestIdleCallback' in window) {
+        (window as unknown as { requestIdleCallback: (cb: () => void) => void })
+          .requestIdleCallback(kick);
+      } else {
+        setTimeout(kick, 500);
+      }
+    })();
+  }, []);
 
   // Go-to-date dialog state
   const [goToDateOpen, setGoToDateOpen] = useState(false);
@@ -80,6 +118,7 @@ function AppInner() {
       }}
     >
       <Toolbar />
+      <IngestProgressBadge />
       <GoToDateDialog open={goToDateOpen} onClose={closeGoToDate} />
       <div style={{ display: 'flex', flex: 1, overflow: 'hidden' }}>
         {/* Left sidebar – fixed width, always operates on the active panel */}

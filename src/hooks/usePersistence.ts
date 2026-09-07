@@ -18,6 +18,7 @@
  */
 import { useEffect } from 'react';
 import { primaryChartStore } from '../store/chartStore';
+import { bootReady } from '../store/chartSession';
 import {
   savePrefs,
   loadPrefs,
@@ -73,6 +74,10 @@ export function usePersistence(): void {
     let unsubStore: (() => void) | null = null;
 
     async function restore(): Promise<void> {
+      // Wait for the new session-restore path to finish so we don't overwrite
+      // an already-loaded series with a stale localStorage snapshot.
+      await bootReady;
+
       const prefs = loadPrefs();
       const ds    = loadDataset();
       const store = primaryChartStore.getState();
@@ -80,8 +85,23 @@ export function usePersistence(): void {
       // 1. Theme – apply immediately so no dark→light flash
       if (prefs?.theme) store.setTheme(prefs.theme);
 
-      if (ds?.url) {
-        // ── Saved dataset: fetch & restore ────────────────────────────────
+      // If the new session-restore path (chartSession.restoreLastSession)
+      // has already loaded a real series into the store, DO NOT touch
+      // rawCandles. This legacy dataset+sample restore existed before the
+      // multi-market DB layer and would overwrite the freshly-loaded series
+      // with a stale MOCKBTC / sample-data snapshot.
+      const alreadyLoaded = !!primaryChartStore.getState().currentSeries;
+
+      if (alreadyLoaded) {
+        // Just apply the prefs bits that don't touch candles.
+        for (const cfg of prefs?.indicatorConfigs ?? []) {
+          store.addIndicator(cfg);
+        }
+        if (prefs?.drawings?.length) {
+          primaryChartStore.setState({ drawings: prefs.drawings });
+        }
+      } else if (ds?.url) {
+        // ── Legacy: saved dataset URL, no new-style series restored ────────
         try {
           const resp = await fetch(ds.url);
           if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
@@ -124,15 +144,13 @@ export function usePersistence(): void {
             store.setTimeframe(prefs.timeframe);
           }
         } catch {
-          // Dataset unavailable (e.g. deleted or network issue) – fall back to defaults
           applyPrefsToSampleData(prefs);
         }
       } else {
-        // ── No saved dataset: load sample data, apply any saved preferences  ─
+        // No saved dataset AND no new-style series → load sample data.
         applyPrefsToSampleData(prefs);
       }
 
-      // Start auto-save subscription AFTER restore is finished
       unsubStore = primaryChartStore.subscribe(scheduleSave);
     }
 

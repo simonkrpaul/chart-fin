@@ -58,6 +58,7 @@ export const ChartCanvas: React.FC<Props> = ({ width, height }) => {
     crosshair,
     themeTokens,
     showIndicatorsAndDrawings,
+    showEmptyGapSlots,
     replay,
     setViewport,
     setCrosshair,
@@ -143,7 +144,7 @@ export const ChartCanvas: React.FC<Props> = ({ width, height }) => {
     ctx.save();
     ctx.scale(dpr, dpr);
 
-    const rc = { ctx, viewport, priceScale, theme: themeTokens, dpr, timeframe, timezone: session.timezone, replayIndex: replay.active ? replay.index : undefined };
+    const rc = { ctx, viewport, priceScale, theme: themeTokens, dpr, timeframe, timezone: session.timezone, replayIndex: replay.active ? replay.index : undefined, showEmptyGapSlots };
     const slotW = (viewport.width - viewport.priceAxisWidth) / viewport.visibleSlotCount;
     const allDrawings = showIndicatorsAndDrawings
       ? (drawingInProgress ? [...drawings, drawingInProgress] : drawings)
@@ -232,6 +233,7 @@ export const ChartCanvas: React.FC<Props> = ({ width, height }) => {
     activeDrawingTool,
     replay,
     showIndicatorsAndDrawings,
+    showEmptyGapSlots,
     hoveredId,
     backtestSignals,
     showBacktestSignals,
@@ -718,7 +720,7 @@ export const ChartCanvas: React.FC<Props> = ({ width, height }) => {
   }, [drawingInProgress, activeDrawingTool, addBarPatternOverlay, setDrawingTool]);
 
   const handleWheel = useCallback(
-    (e: React.WheelEvent) => {
+    (e: WheelEvent) => {
       e.preventDefault();
       const rect = (e.target as HTMLCanvasElement).getBoundingClientRect();
       const x = e.clientX - rect.left;
@@ -743,8 +745,22 @@ export const ChartCanvas: React.FC<Props> = ({ width, height }) => {
         pan(delta);
       }
     },
+    // Refs for these are captured — see the useEffect that attaches the
+    // native (non-passive) wheel listener below.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     [viewport, sw, priceScale],
   );
+
+  // React binds onWheel as a passive listener since v17, so e.preventDefault()
+  // is silently ignored, causing the browser to scroll the page instead of
+  // panning/zooming the chart. Attach the wheel handler manually with
+  // { passive: false } so preventDefault actually takes effect.
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    canvas.addEventListener('wheel', handleWheel, { passive: false });
+    return () => canvas.removeEventListener('wheel', handleWheel);
+  }, [handleWheel]);
 
   const handleMouseLeave = useCallback(() => {
     setCrosshair({ visible: false });
@@ -810,7 +826,6 @@ export const ChartCanvas: React.FC<Props> = ({ width, height }) => {
         onMouseMove={handleMouseMove}
         onMouseDown={handleMouseDown}
         onMouseUp={handleMouseUp}
-        onWheel={handleWheel}
         onMouseLeave={handleMouseLeave}
         onDoubleClick={handleDblClick}
         onContextMenu={handleContextMenu}

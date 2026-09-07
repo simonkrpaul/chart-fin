@@ -8,7 +8,7 @@
  *     projected forward by N days so it aligns to the anchor date on screen.
  *   - Rolls forward automatically to today / the latest chart bar.
  */
-import React, { useState, useMemo } from 'react';
+import React, { useEffect, useState, useMemo } from 'react';
 import { useChartStore } from '../store/chartStore';
 import { computeCorrelation, scanBestCorrelation } from '../engine/correlationEngine';
 import type { OffsetOverlayConfig, OverlayMode } from '../types';
@@ -47,9 +47,18 @@ export const OverlayPanel: React.FC = () => {
     return map;
   }, [overlayConfigs, overlays, primarySlots]);
 
-  // Default anchor = 2025-01-01; default offset = 273 calendar days
-  const [anchorDate, setAnchorDate] = useState('2025-01-01');
+  // Default anchor = latest date in the loaded series (or today if empty).
+  const [anchorDate, setAnchorDate] = useState(() => new Date().toISOString().slice(0, 10));
   const [offsetDays, setOffsetDays] = useState(273);
+
+  // When a new series loads (or after boot restore), snap the anchor to the
+  // series' last bar so the scanner default has data on both sides.
+  useEffect(() => {
+    if (rawCandles.length === 0) return;
+    const lastMs = rawCandles[rawCandles.length - 1].timestamp;
+    const iso = new Date(lastMs).toISOString().slice(0, 10);
+    setAnchorDate(prev => prev === '2025-01-01' || prev === new Date().toISOString().slice(0, 10) ? iso : prev);
+  }, [rawCandles.length]);
   const [mode, setMode] = useState<OverlayMode>('overlay');
   const [color, setColor] = useState(PALETTE[0]);
   const [showSwingHL, setShowSwingHL] = useState(false);
@@ -58,6 +67,7 @@ export const OverlayPanel: React.FC = () => {
 
   // Correlation scanner state
   const [scanMax, setScanMax] = useState(5000);
+  const [scanMin, setScanMin] = useState(1);
   const [scanWindow, setScanWindow] = useState(90);
   const [scanMode, setScanMode] = useState<ScanMode>('returns');
   const [scanSwingLR, setScanSwingLR] = useState(5);
@@ -278,10 +288,18 @@ export const OverlayPanel: React.FC = () => {
         <div style={{ fontWeight: 600, marginBottom: 6, fontSize: 11 }}>Correlation Scanner</div>
         <div style={{ display: 'flex', gap: 4, marginBottom: 4 }}>
           <div style={{ flex: 1 }}>
+            <label style={{ display: 'block', opacity: 0.6, fontSize: 10, marginBottom: 2 }}>Min offset days</label>
+            <input
+              type="number" min={1} max={10000} value={scanMin}
+              onChange={e => setScanMin(Math.max(1, Number(e.target.value)))}
+              style={inputStyle}
+            />
+          </div>
+          <div style={{ flex: 1 }}>
             <label style={{ display: 'block', opacity: 0.6, fontSize: 10, marginBottom: 2 }}>Max offset days</label>
             <input
-              type="number" min={100} max={10000} value={scanMax}
-              onChange={e => setScanMax(Math.max(100, Number(e.target.value)))}
+              type="number" min={1} max={10000} value={scanMax}
+              onChange={e => setScanMax(Math.max(1, Number(e.target.value)))}
               style={inputStyle}
             />
           </div>
@@ -322,16 +340,42 @@ export const OverlayPanel: React.FC = () => {
             setScanProgress(0);
             const anchorMs = new Date(anchorDate + 'T00:00:00Z').getTime();
             const windowMs = scanWindow * 24 * 60 * 60 * 1000;
+            const firstMs = rawCandles[0]?.timestamp;
+            const lastMs  = rawCandles[rawCandles.length - 1]?.timestamp;
+            // eslint-disable-next-line no-console
+            console.info('[scan] start', {
+              anchor: anchorDate, window: scanWindow, mode: scanMode,
+              minDays: scanMin, maxDays: scanMax, rows: rawCandles.length,
+              rangeFirst: firstMs ? new Date(firstMs).toISOString().slice(0, 10) : null,
+              rangeLast:  lastMs  ? new Date(lastMs).toISOString().slice(0, 10)  : null,
+              anchorInRange: firstMs !== undefined && lastMs !== undefined
+                ? anchorMs >= firstMs && anchorMs <= lastMs
+                : false,
+            });
             // Run async to avoid blocking UI
             setTimeout(() => {
-              const results = scanBestCorrelation(
-                rawCandles, anchorMs, windowMs, scanMax, 1, 15,
-                (pct) => setScanProgress(pct),
-                scanMode, scanSwingLR,
-              );
-              setScanResults(results);
-              setScanning(false);
-              setScanProgress(1);
+              try {
+                const results = scanBestCorrelation(
+                  rawCandles, anchorMs, windowMs, scanMax, 1, 15,
+                  (pct) => setScanProgress(pct),
+                  scanMode, scanSwingLR,
+                  scanMin,
+                );
+                // eslint-disable-next-line no-console
+                console.info('[scan] done', {
+                  positive: results.positive.length,
+                  negative: results.negative.length,
+                  topPos: results.positive[0], topNeg: results.negative[0],
+                });
+                setScanResults(results);
+              } catch (e) {
+                // eslint-disable-next-line no-console
+                console.error('[scan] failed', e);
+                setScanResults({ positive: [], negative: [] });
+              } finally {
+                setScanning(false);
+                setScanProgress(1);
+              }
             }, 0);
           }}
           style={{
@@ -340,7 +384,7 @@ export const OverlayPanel: React.FC = () => {
             border: 'none', borderRadius: 4, cursor: scanning ? 'wait' : 'pointer', fontSize: 11,
           }}
         >
-          {scanning ? `Scanning... ${Math.round(scanProgress * 100)}%` : `Scan 1–${scanMax} days`}
+          {scanning ? `Scanning... ${Math.round(scanProgress * 100)}%` : `Scan ${scanMin}–${scanMax} days`}
         </button>
         {scanResults && (scanResults.positive.length > 0 || scanResults.negative.length > 0) && (
           <div style={{ marginTop: 6 }}>

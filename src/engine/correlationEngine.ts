@@ -54,10 +54,12 @@ function swingMoves(candles: RawCandle[], leftRight: number): number[] {
 }
 
 /**
- * Scan offsets from 1..maxDays to find the best-correlating historical period.
+ * Scan offsets from `minDays..maxDays` to find the best-correlating historical
+ * period.
  *
  * @param mode - 'returns' for close-to-close returns, 'swing' for swing-point % moves
  * @param swingLR - Left/Right bars for swing detection (used when mode='swing')
+ * @param minDays - Lowest offset to try (default 1)
  */
 export function scanBestCorrelation(
   rawCandles: RawCandle[],
@@ -69,6 +71,7 @@ export function scanBestCorrelation(
   onProgress?: (pct: number) => void,
   mode: ScanMode = 'returns',
   swingLR = 5,
+  minDays = 1,
 ): ScanOutput {
   const dayMs = 24 * 60 * 60 * 1000;
 
@@ -96,9 +99,11 @@ export function scanBestCorrelation(
   if (currentSeries.length < 3) return { positive: [], negative: [] };
 
   const results: ScanResult[] = [];
-  const totalSteps = Math.floor(maxDays / stepDays);
+  const startStep = Math.max(1, Math.floor(minDays / stepDays));
+  const endStep   = Math.floor(maxDays / stepDays);
+  const totalSteps = Math.max(1, endStep - startStep + 1);
 
-  for (let step = 1; step <= totalSteps; step++) {
+  for (let step = startStep; step <= endStep; step++) {
     const offsetDays = step * stepDays;
     const shiftMs = offsetDays * dayMs;
 
@@ -134,7 +139,7 @@ export function scanBestCorrelation(
     results.push({ offsetDays, r, n: len });
 
     if (onProgress && step % 50 === 0) {
-      onProgress(step / totalSteps);
+      onProgress((step - startStep + 1) / totalSteps);
     }
   }
 
