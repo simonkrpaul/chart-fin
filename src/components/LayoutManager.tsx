@@ -8,6 +8,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { useChartStore } from '../store/chartStore';
 import { saveLayout, listLayouts, deleteLayout } from '../db/persistence';
+import { saveLayoutDb, deleteLayoutDb } from '../db/marketStore';
 import type { ChartLayout } from '../types';
 
 export const LayoutManager: React.FC = () => {
@@ -47,7 +48,9 @@ export const LayoutManager: React.FC = () => {
     const trimmed = name.trim();
     if (!trimmed) { setStatus('⚠ Please enter a name'); return; }
     const layout = exportLayout();
-    saveLayout({ ...layout, name: trimmed });
+    const named = { ...layout, name: trimmed };
+    saveLayout(named);
+    void saveLayoutDb(named);
     setLayouts(listLayouts());
     setStatus(`✓ Saved "${trimmed}"`);
     setTimeout(() => setStatus(''), 2500);
@@ -63,6 +66,7 @@ export const LayoutManager: React.FC = () => {
   function handleDelete(e: React.MouseEvent, id: string, layoutName: string) {
     e.stopPropagation();
     deleteLayout(id);
+    void deleteLayoutDb(id);
     setLayouts(listLayouts());
     setStatus(`Deleted "${layoutName}"`);
     setTimeout(() => setStatus(''), 2000);

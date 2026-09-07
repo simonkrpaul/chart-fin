@@ -74,6 +74,14 @@ function _emaSmoothArray(data: (number | null)[], period: number): (number | nul
   return result;
 }
 
+// Filters empty-gap (weekend/holiday) slots out and re-indexes when the user
+// has toggled gap visibility off. Returned array is a new object each call.
+function _applyGapVisibility(slots: CandleSlot[], showEmpty: boolean): CandleSlot[] {
+  if (showEmpty) return slots;
+  const kept = slots.filter(s => s.status !== 'weekend' && s.status !== 'holiday');
+  return kept.map((s, i) => ({ ...s, slotIndex: i }));
+}
+
 // How many slots (including extrapolated future overlay/combiner slots) the chart spans.
 function _effectiveSlotCount(state: { primarySlots: CandleSlot[]; overlays: Record<string, OffsetOverlay>; cycleCombinerOutput?: CycleCombinerOutput | null; cycleCombinerConfig?: CycleCombinerConfig }): number {
   let max = state.primarySlots.length;
@@ -160,6 +168,13 @@ export interface ChartState {
   theme: 'dark' | 'light';
   themeTokens: ThemeTokens;
   showIndicatorsAndDrawings: boolean;
+  /** When true, weekend/holiday slots render an underscore glyph; when false, they render invisible. */
+  showEmptyGapSlots: boolean;
+
+  // Current DB-loaded series context (used for lazy backfill on pan-left).
+  currentSeries: { market: string; symbol: string; timeframe: Timeframe } | null;
+  /** True when an async DB backfill is in flight – suppresses re-entry. */
+  backfillInFlight: boolean;
 
   // History (undo/redo)
   past: Drawing[][];
@@ -216,6 +231,11 @@ export interface ChartActions {
    */
   loadCandles: (raw: RawCandle[], startMs: number, endMs: number, _preserveBase?: boolean) => void;
   appendCandles: (raw: RawCandle[]) => void;
+  /** Prepend older candles (used by lazy backfill). Keeps viewport locked to the same slot the user was viewing. */
+  prependCandles: (raw: RawCandle[]) => void;
+  /** Record the DB series currently backing this chart so lazy backfill knows what to fetch. */
+  setCurrentSeries: (series: { market: string; symbol: string; timeframe: Timeframe } | null) => void;
+  setBackfillInFlight: (v: boolean) => void;
   addBarPatternOverlay: (sourceStartSlotIndex: number, sourceEndSlotIndex: number) => void;
 
   // Viewport
@@ -303,6 +323,7 @@ export interface ChartActions {
   // UI
   setTheme: (t: 'dark' | 'light') => void;
   toggleIndicatorsAndDrawingsVisibility: () => void;
+  toggleEmptyGapSlots: () => void;
 
   // Layout persistence
   exportLayout: () => ChartLayout;
@@ -377,6 +398,11 @@ export function createChartStore(panelId: string = 'p1'): StoreApi<ChartState & 
     theme: 'dark',
     themeTokens: darkTheme,
     showIndicatorsAndDrawings: true,
+    showEmptyGapSlots: true,
+
+    // ── current DB series ──────────────────────────────────────────────────
+    currentSeries: null,
+    backfillInFlight: false,
 
     // ── history ─────────────────────────────────────────────────────────────
     past: [],
@@ -449,15 +475,32 @@ export function createChartStore(panelId: string = 'p1'): StoreApi<ChartState & 
         source = base;
       }
 
-      // Build slots directly from source candle timestamps to guarantee
-      // every candle maps to exactly one slot with zero gaps.
+      // Build a session-aware slot grid so weekends/holidays become empty
+      // slots (rendered as gaps or "_" markers), then place candles into it.
+      // Falls back to a raw-timestamp grid when the session grid fits poorly
+      // (e.g. 24/7 crypto on a weekday-only preset).
       const sorted = [...source].sort((a, b) => a.timestamp - b.timestamp);
-      const normalized: CandleSlot[] = sorted.map((candle, i) => ({
-        slotIndex: i,
-        timestamp: candle.timestamp,
-        status: 'trading' as const,
-        candle,
-      }));
+      if (sorted.length === 0) return;
+      const startMs = sorted[0].timestamp;
+      const endMs   = sorted[sorted.length - 1].timestamp;
+
+      let slots = generateSlots(startMs, endMs, tf, s.session);
+      let normalized = normalizeCandles(slots, sorted, tf);
+
+      const tradingSlots = normalized.filter(sl => sl.status === 'trading').length;
+      const filled = normalized.filter(sl => sl.candle !== null).length;
+      const capturedFraction = sorted.length > 0 ? filled / sorted.length : 1;
+      const poorIntradayFit = INTRADAY_TIMEFRAMES.includes(tf)
+        && tradingSlots > 0
+        && (filled / tradingSlots < 0.15 || capturedFraction < 0.5);
+      const poorGeneralFit = capturedFraction < 0.8;
+
+      if (poorIntradayFit || poorGeneralFit) {
+        slots = generateUnconstrainedSlots(startMs, endMs, tf);
+        normalized = normalizeCandles(slots, sorted, tf);
+      }
+
+      normalized = _applyGapVisibility(normalized, s.showEmptyGapSlots);
 
       const visibleCount = Math.min(200, normalized.length);
 
@@ -552,6 +595,7 @@ export function createChartStore(panelId: string = 'p1'): StoreApi<ChartState & 
         normalized = normalizeCandles(slots, raw, timeframe);
       }
 
+      normalized = _applyGapVisibility(normalized, get().showEmptyGapSlots);
       const visibleCount = Math.min(200, normalized.length);
 
       set(state => {
@@ -619,6 +663,77 @@ export function createChartStore(panelId: string = 'p1'): StoreApi<ChartState & 
       }
 
       _autoFitPriceScale(set, get);
+    },
+
+    prependCandles: (older) => {
+      if (older.length === 0) return;
+      const { rawCandles, timeframe, session, viewport } = get();
+      if (rawCandles.length === 0) {
+        // No baseline yet – fall through to full loadCandles.
+        const startMs = older[0].timestamp;
+        const endMs = older[older.length - 1].timestamp;
+        get().loadCandles(older, startMs, endMs);
+        return;
+      }
+
+      // Merge older ⨯ existing without duplicates, preserving ascending order.
+      const seen = new Set<number>(rawCandles.map(c => c.timestamp));
+      const merged: RawCandle[] = [];
+      for (const c of older) if (!seen.has(c.timestamp)) merged.push(c);
+      if (merged.length === 0) return;
+      const combined = [...merged, ...rawCandles];
+      combined.sort((a, b) => a.timestamp - b.timestamp);
+
+      const startMs = combined[0].timestamp;
+      const endMs = combined[combined.length - 1].timestamp;
+
+      // Rebuild slots against the extended range.
+      let slots = generateSlots(startMs, endMs, timeframe, session);
+      let normalized = normalizeCandles(slots, combined, timeframe);
+      const tradingSlots = normalized.filter(s => s.status === 'trading').length;
+      const filled = normalized.filter(s => s.candle !== null).length;
+      const capturedFraction = combined.length > 0 ? filled / combined.length : 1;
+      const poorIntraday = INTRADAY_TIMEFRAMES.includes(timeframe)
+        && tradingSlots > 0
+        && (filled / tradingSlots < 0.15 || capturedFraction < 0.5);
+      const poorGeneral = capturedFraction < 0.8;
+      if (poorIntraday || poorGeneral) {
+        slots = generateUnconstrainedSlots(startMs, endMs, timeframe);
+        normalized = normalizeCandles(slots, combined, timeframe);
+      }
+
+      // Lock the viewport to the same rightmost slot the user was looking at
+      // so the visible window doesn't jump when we prepend history.
+      const shift = normalized.length - get().primarySlots.length;
+
+      set(state => {
+        state.rawCandles = combined;
+        if (state.baseTimeframe === null || state.timeframe === state.baseTimeframe) {
+          state.baseCandles = combined;
+        }
+        state.primarySlots = normalized;
+        state.viewport.firstSlotIndex = Math.max(0, viewport.firstSlotIndex + shift);
+      });
+
+      get().recomputeAllIndicators();
+      const configs = get().overlayConfigs;
+      for (const cfg of configs) {
+        const s = get();
+        const resolvedHist = _resolveOverlayHistoricalCandles(s, cfg, s.historicalCandlesByOverlay[cfg.id] ?? []);
+        set(state => {
+          state.overlays[cfg.id] = buildOffsetOverlay(state.primarySlots, cfg, resolvedHist, state.session, state.timeframe);
+          state.historicalCandlesByOverlay[cfg.id] = resolvedHist;
+        });
+      }
+      _autoFitPriceScale(set, get);
+    },
+
+    setCurrentSeries: (series) => {
+      set(state => { state.currentSeries = series; });
+    },
+
+    setBackfillInFlight: (v) => {
+      set(state => { state.backfillInFlight = v; });
     },
 
     addBarPatternOverlay: (sourceStartSlotIndex, sourceEndSlotIndex) => {
@@ -1357,6 +1472,17 @@ export function createChartStore(panelId: string = 'p1'): StoreApi<ChartState & 
       });
     },
 
+    toggleEmptyGapSlots: () => {
+      set(state => {
+        state.showEmptyGapSlots = !state.showEmptyGapSlots;
+      });
+      // Rebuild slots so weekend/holiday rows are added or dropped as needed.
+      const s = get();
+      if (s.baseCandles.length > 0) {
+        get().setTimeframe(s.timeframe);
+      }
+    },
+
     // ────────────────────────────────────────────────────────────────────────
     // LAYOUT PERSISTENCE
     // ────────────────────────────────────────────────────────────────────────
@@ -1367,6 +1493,7 @@ export function createChartStore(panelId: string = 'p1'): StoreApi<ChartState & 
         id: crypto.randomUUID(),
         name: 'Untitled Layout',
         timeframe: s.timeframe,
+        series: s.currentSeries ? { ...s.currentSeries } : undefined,
         drawings: s.drawings,
         indicators: s.indicatorConfigs,
         overlays: s.overlayConfigs,
@@ -1389,6 +1516,11 @@ export function createChartStore(panelId: string = 'p1'): StoreApi<ChartState & 
         Object.assign(state.priceScale, layout.priceScale);
         state.theme = layout.theme;
         state.themeTokens = layout.theme === 'dark' ? darkTheme : lightTheme;
+        if (layout.series) state.currentSeries = {
+          market: layout.series.market,
+          symbol: layout.series.symbol,
+          timeframe: layout.series.timeframe,
+        };
       });
     },
   })),

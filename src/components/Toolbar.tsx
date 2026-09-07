@@ -3,9 +3,7 @@
  */
 import React, { useCallback } from 'react';
 import { useChartStore } from '../store/chartStore';
-import { DataLoader } from './DataLoader';
-import { RemoteLoader } from './RemoteLoader';
-import { BybitLiveLoader } from './BybitLiveLoader';
+import { ChartPicker } from './ChartPicker';
 import { LayoutManager } from './LayoutManager';
 import { LayoutSelector } from './LayoutSelector';
 import { TimezoneSelector } from './TimezoneSelector';
@@ -37,6 +35,8 @@ export const Toolbar: React.FC = () => {
     setTheme,
     showIndicatorsAndDrawings,
     toggleIndicatorsAndDrawingsVisibility,
+    showEmptyGapSlots,
+    toggleEmptyGapSlots,
     undoDrawing,
     redoDrawing,
     past,
@@ -111,6 +111,14 @@ export const Toolbar: React.FC = () => {
         {showIndicatorsAndDrawings ? 'Hide Ind+Draw' : 'Show Ind+Draw'}
       </button>
 
+      <button
+        style={btn(!showEmptyGapSlots)}
+        onClick={toggleEmptyGapSlots}
+        title="Toggle empty gap (weekend/holiday) placeholder candles"
+      >
+        {showEmptyGapSlots ? '_ Gaps: On' : '_ Gaps: Off'}
+      </button>
+
       <div style={{ width: 1, height: 20, background: border, margin: '0 6px' }} />
 
       {/* Undo/Redo */}
@@ -145,18 +153,8 @@ export const Toolbar: React.FC = () => {
 
       <div style={{ width: 1, height: 20, background: border, margin: '0 6px' }} />
 
-      {/* File upload */}
-      <DataLoader />
-
-      <div style={{ width: 1, height: 20, background: border, margin: '0 6px' }} />
-
-      {/* Remote / pre-generated datasets */}
-      <RemoteLoader />
-
-      <div style={{ width: 1, height: 20, background: border, margin: '0 6px' }} />
-
-      {/* Live Bybit BTCUSDT perpetual feed */}
-      <BybitLiveLoader />
+      {/* Unified: open a saved chart or a series from DB (with ingest button) */}
+      <ChartPicker />
 
       <div style={{ width: 1, height: 20, background: border, margin: '0 6px' }} />
 

@@ -51,6 +51,8 @@ export interface RenderContext {
   timezone: string;
   /** If set, only render candles/indicators up to this slot index (bar replay mode). */
   replayIndex?: number;
+  /** When true, weekend/holiday slots get an underscore glyph placeholder. */
+  showEmptyGapSlots?: boolean;
 }
 
 function slotWidth(vp: Viewport): number {
@@ -102,6 +104,22 @@ export function renderBackground(rc: RenderContext, slots: CandleSlot[]): void {
       const x = i * sw;
       ctx.fillStyle = theme.missingSlot;
       ctx.fillRect(x, 0, sw, ph);
+
+      // Underscore glyph at midprice so users can see the placeholder slot
+      // as an empty candle. Only when `showEmptyGapSlots` is on.
+      if (rc.showEmptyGapSlots) {
+        const midY = ph / 2;
+        const centreX = x + sw / 2;
+        const glyphW = Math.max(2, Math.min(sw * 0.6, 8));
+        ctx.strokeStyle = theme.axisText;
+        ctx.globalAlpha = 0.35;
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(centreX - glyphW / 2, midY);
+        ctx.lineTo(centreX + glyphW / 2, midY);
+        ctx.stroke();
+        ctx.globalAlpha = 1;
+      }
     }
   }
 }

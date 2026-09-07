@@ -5,9 +5,10 @@ import React from 'react';
 import { useChartStore } from '../store/chartStore';
 
 export const CandleTooltip: React.FC = () => {
-  const { crosshair, primarySlots, theme, overlayConfigs, overlays, session, timeframe, showIndicatorsAndDrawings } = useChartStore();
-
-  if (!crosshair.visible) return null;
+  const {
+    crosshair, primarySlots, theme, overlayConfigs, overlays,
+    session, timeframe, showIndicatorsAndDrawings, currentSeries, rawCandles,
+  } = useChartStore();
 
   const slot = primarySlots[crosshair.slotIndex];
   const c = slot?.candle;
@@ -16,6 +17,33 @@ export const CandleTooltip: React.FC = () => {
   const mono: React.CSSProperties = { fontFamily: 'monospace', fontSize: 12 };
   const bull = '#26a69a';
   const bear = '#ef5350';
+
+  // Prefer the DB-loaded series identity; fall back to whatever the raw
+  // candles carry (works for CSV files that only set `symbol` per row).
+  const seriesLabel = currentSeries
+    ? `${currentSeries.market.toUpperCase()} · ${currentSeries.symbol}`
+    : (rawCandles[0]?.symbol ? rawCandles[0].symbol : 'No symbol loaded');
+
+  // Header block – shown even when the cursor isn't over a bar so the chart
+  // always tells you what you're looking at.
+  const header = (
+    <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginBottom: 2 }}>
+      <strong style={{ fontSize: 13 }}>{seriesLabel}</strong>
+      <span style={{ fontSize: 11, opacity: 0.7 }}>{timeframe}</span>
+    </div>
+  );
+
+  // No crosshair yet – render just the header at the top-left as a watermark.
+  if (!crosshair.visible) {
+    return (
+      <div style={{
+        position: 'absolute', top: 8, left: 8, background: bg, color: text,
+        padding: '4px 8px', borderRadius: 4, ...mono, boxShadow: '0 1px 4px rgba(0,0,0,0.2)',
+      }}>
+        {header}
+      </div>
+    );
+  }
 
   // Use the resolved (possibly extrapolated) timestamp from crosshair state
   const displayTs = crosshair.timestamp || slot?.timestamp || 0;
@@ -48,7 +76,8 @@ export const CandleTooltip: React.FC = () => {
   if (!c) {
     return (
       <div style={{ position: 'absolute', top: 8, left: 8, background: bg, color: text, padding: '4px 8px', borderRadius: 4, ...mono }}>
-        {formatTime(displayTs)} — No data
+        {header}
+        <div style={{ opacity: 0.7 }}>{formatTime(displayTs)} — No data</div>
       </div>
     );
   }
@@ -59,6 +88,7 @@ export const CandleTooltip: React.FC = () => {
 
   return (
     <div style={{ position: 'absolute', top: 8, left: 8, background: bg, color: text, padding: '6px 10px', borderRadius: 4, ...mono, lineHeight: 1.6, boxShadow: '0 2px 8px rgba(0,0,0,0.3)' }}>
+      {header}
       <div style={{ opacity: 0.6, fontSize: 10 }}>{formatTime(c.timestamp)}</div>
       <div>
         O <span style={{ color }}>{c.open.toFixed(2)}</span>{' '}

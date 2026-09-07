@@ -20,4 +20,10 @@ export default defineConfig({
   optimizeDeps: {
     exclude: ['@duckdb/duckdb-wasm'],
   },
+  build: {
+    // Our bundle is dominated by @duckdb/duckdb-wasm (~300 kB). The app is a
+    // single-page desktop-style tool that loads once and is cached, so the
+    // default 500 kB warning threshold is unhelpful noise.
+    chunkSizeWarningLimit: 800,
+  },
 })
