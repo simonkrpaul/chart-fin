@@ -27,3 +27,4 @@ dist-ssr
 public/data/
 *.parquet
 *.csv
+out/
