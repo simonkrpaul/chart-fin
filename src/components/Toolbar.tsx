@@ -15,6 +15,7 @@ const TOOLS: { key: DrawingTool; label: string; title?: string }[] = [
   { key: 'fibonacci', label: '◇ Fib', title: 'Fibonacci retracement – drag from swing high to swing low (or vice versa)' },
   { key: 'horizontal', label: '─ H-Line' },
   { key: 'vertical', label: '│ V-Line' },
+  { key: 'cyclic', label: '┃┃┃ Cycles', title: 'Cyclic Lines – click first line, then click again to set interval; drag the anchor to slide' },
   { key: 'rectangle', label: '□ Rect' },
   { key: 'measurement', label: '↔ Measure' },
   { key: 'long_position', label: '▲ Long', title: 'Long position – click entry, drag to take-profit (shows TP/SL/R:R)' },

@@ -95,7 +95,9 @@ export function renderBackground(rc: RenderContext, slots: CandleSlot[]): void {
     ctx.stroke();
   }
 
-  // Shade missing slots (weekend / holiday)
+  // Shade missing slots (weekend / holiday get the underscore glyph;
+  // intraday off-session slots stay invisible so overlay candles render
+  // continuously across the overnight window).
   for (let i = 0; i < vp.visibleSlotCount; i++) {
     const si = vp.firstSlotIndex + i;
     if (si >= slots.length) break;
@@ -1669,6 +1671,181 @@ function distToSegment(px: number, py: number, x1: number, y1: number, x2: numbe
   return Math.hypot(px - x1 - t * dx, py - y1 - t * dy);
 }
 
+// ── Cyclic Lines renderer (private) ────────────────────────────────────────
+// Draws equally-spaced vertical lines starting at the anchor. Forward, backward
+// or both directions. Anchor line is emphasised so users know which one to grab.
+// When `isPreview` is true (during creation drag), overlays a horizontal
+// bracket between the anchor and the first cycle line with the bar-count.
+function _renderCyclicLines(
+  ctx: CanvasRenderingContext2D,
+  d: import('../types').CyclicLinesDrawing,
+  vp: Viewport,
+  sw: number,
+  pw: number,
+  ph: number,
+  theme: ThemeTokens,
+  ps?: PriceScale,
+  isPreview = false,
+): void {
+  const anchorScreen = (d.anchor.slotIndex - vp.firstSlotIndex) * sw + sw / 2;
+  const step = Math.max(1, d.intervalBars) * sw;
+  const count = Math.max(1, d.count);
+
+  const drawForward  = d.direction === 'forward'  || d.direction === 'both';
+  const drawBackward = d.direction === 'backward' || d.direction === 'both';
+
+  ctx.save();
+  ctx.strokeStyle = d.color;
+  ctx.lineWidth = d.lineWidth;
+
+  // Anchor line — solid, slightly emphasised so it's obvious what to drag.
+  if (anchorScreen >= 0 && anchorScreen <= pw) {
+    ctx.setLineDash([]);
+    ctx.lineWidth = d.lineWidth + 1;
+    ctx.globalAlpha = 0.95;
+    ctx.beginPath();
+    ctx.moveTo(anchorScreen, 0);
+    ctx.lineTo(anchorScreen, ph);
+    ctx.stroke();
+  }
+
+  // Cycle lines — dashed & slightly muted so the anchor stands out.
+  ctx.setLineDash([5, 4]);
+  ctx.lineWidth = d.lineWidth;
+  ctx.globalAlpha = 0.7;
+
+  if (drawForward) {
+    for (let k = 1; k <= count; k++) {
+      const x = anchorScreen + k * step;
+      if (x > pw + 10) break;
+      if (x < -10) continue;
+      ctx.beginPath();
+      ctx.moveTo(x, 0);
+      ctx.lineTo(x, ph);
+      ctx.stroke();
+    }
+  }
+  if (drawBackward) {
+    for (let k = 1; k <= count; k++) {
+      const x = anchorScreen - k * step;
+      if (x < -10) break;
+      if (x > pw + 10) continue;
+      ctx.beginPath();
+      ctx.moveTo(x, 0);
+      ctx.lineTo(x, ph);
+      ctx.stroke();
+    }
+  }
+  ctx.setLineDash([]);
+  ctx.globalAlpha = 1;
+
+  // Labels ("Nx") above each visible line — kept minimal so a dense cycle
+  // set doesn't clutter the price pane.
+  if (d.showLabels) {
+    ctx.font = '9px -apple-system, BlinkMacSystemFont, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'top';
+    ctx.fillStyle = d.color;
+    const drawLabel = (x: number, k: number) => {
+      if (x < 4 || x > pw - 4) return;
+      const txt = k === 0 ? '0' : (k > 0 ? `+${k}` : `${k}`);
+      const w = ctx.measureText(txt).width + 4;
+      ctx.globalAlpha = 0.85;
+      ctx.fillStyle = theme.background;
+      ctx.fillRect(x - w / 2, 2, w, 11);
+      ctx.globalAlpha = 1;
+      ctx.fillStyle = d.color;
+      ctx.fillText(txt, x, 4);
+    };
+    drawLabel(anchorScreen, 0);
+    if (drawForward)  for (let k = 1; k <= count; k++) drawLabel(anchorScreen + k * step, k);
+    if (drawBackward) for (let k = 1; k <= count; k++) drawLabel(anchorScreen - k * step, -k);
+  }
+
+  // Live creation overlay: horizontal bracket + "N bars" label between the
+  // anchor and the first cycle line so the user sees the interval as they drag.
+  if (isPreview && ps) {
+    const sign = drawBackward && !drawForward ? -1 : 1;
+    const secondX = anchorScreen + sign * step;
+    const y = priceToY(d.anchor.price, ps, ph);
+    if (Number.isFinite(secondX)) {
+      const x1 = Math.min(anchorScreen, secondX);
+      const x2 = Math.max(anchorScreen, secondX);
+
+      ctx.save();
+      ctx.strokeStyle = d.color;
+      ctx.lineWidth = 1.5;
+      ctx.setLineDash([]);
+      // Horizontal connector
+      ctx.beginPath();
+      ctx.moveTo(x1, y);
+      ctx.lineTo(x2, y);
+      ctx.stroke();
+      // End-tick markers so the bracket reads as "from here to here"
+      const tick = 5;
+      ctx.beginPath();
+      ctx.moveTo(x1, y - tick); ctx.lineTo(x1, y + tick);
+      ctx.moveTo(x2, y - tick); ctx.lineTo(x2, y + tick);
+      ctx.stroke();
+
+      // Bar-count label centred on the bracket
+      const midX = (x1 + x2) / 2;
+      const bars = Math.max(1, d.intervalBars);
+      const labelText = bars === 1 ? '1 bar' : `${bars} bars`;
+      ctx.font = 'bold 11px -apple-system, BlinkMacSystemFont, sans-serif';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      const tw = ctx.measureText(labelText).width + 10;
+      const th = 16;
+      ctx.globalAlpha = 0.95;
+      ctx.fillStyle = theme.background;
+      ctx.fillRect(midX - tw / 2, y - th / 2, tw, th);
+      ctx.strokeStyle = d.color;
+      ctx.lineWidth = 1;
+      ctx.strokeRect(midX - tw / 2, y - th / 2, tw, th);
+      ctx.fillStyle = d.color;
+      ctx.globalAlpha = 1;
+      ctx.fillText(labelText, midX, y);
+      ctx.restore();
+    }
+  } else {
+    // Committed drawing — show a compact "N bars" pill just below the top-of-
+    // pane labels, centred between the anchor line and the first cycle line,
+    // so the interval is always readable at a glance without needing to hover.
+    const sign = drawBackward && !drawForward ? -1 : 1;
+    const secondX = anchorScreen + sign * step;
+    if (Number.isFinite(secondX)) {
+      const midX = (anchorScreen + secondX) / 2;
+      const bars = Math.max(1, d.intervalBars);
+      const labelText = bars === 1 ? '1 bar' : `${bars} bars`;
+      // Skip when the pill would land off-screen
+      if (midX > -40 && midX < pw + 40) {
+        ctx.save();
+        ctx.font = 'bold 10px -apple-system, BlinkMacSystemFont, sans-serif';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        const tw = ctx.measureText(labelText).width + 8;
+        const th = 14;
+        // Position below the "N×" labels row (~y=16) if labels are on,
+        // otherwise near the top of the pane.
+        const py = d.showLabels ? 22 : 8;
+        ctx.globalAlpha = 0.9;
+        ctx.fillStyle = theme.background;
+        ctx.fillRect(midX - tw / 2, py, tw, th);
+        ctx.strokeStyle = d.color;
+        ctx.lineWidth = 1;
+        ctx.strokeRect(midX - tw / 2, py, tw, th);
+        ctx.fillStyle = d.color;
+        ctx.globalAlpha = 1;
+        ctx.fillText(labelText, midX, py + th / 2);
+        ctx.restore();
+      }
+    }
+  }
+
+  ctx.restore();
+}
+
 /**
  * Returns the ID of the topmost drawing under the given canvas point, or null.
  * Iterates in reverse draw order so the front-most drawing wins.
@@ -1696,6 +1873,27 @@ export function hitTestDrawings(
       case 'vertical': {
         const x = (d.slotIndex - vp.firstSlotIndex) * sw + sw / 2;
         if (Math.abs(cx - x) <= HIT_TOLERANCE) return d.id;
+        break;
+      }
+      case 'cyclic': {
+        // Hit if the cursor is near ANY of the drawn lines. The anchor line
+        // gets a wider hit box so it's easy to grab for sliding.
+        const anchorX = (d.anchor.slotIndex - vp.firstSlotIndex) * sw + sw / 2;
+        const dxAnchor = Math.abs(cx - anchorX);
+        if (dxAnchor <= HIT_TOLERANCE + 3) return d.id;
+        const step = d.intervalBars * sw;
+        if (step > 0 && d.count > 0) {
+          const off = cx - anchorX;
+          // How many intervals away is the cursor?
+          const k = Math.round(off / step);
+          if (k !== 0 && Math.abs(k) <= d.count) {
+            const dxLine = Math.abs(off - k * step);
+            const allowedSide = d.direction === 'both'
+              || (d.direction === 'forward' && k > 0)
+              || (d.direction === 'backward' && k < 0);
+            if (allowedSide && dxLine <= HIT_TOLERANCE) return d.id;
+          }
+        }
         break;
       }
       case 'trendline': {
@@ -1841,6 +2039,10 @@ export function renderDrawings(
           ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, ph); ctx.stroke();
           break;
         }
+        case 'cyclic': {
+          _renderCyclicLines(ctx, hd, vp, sw, pw, ph, rc.theme, ps, true);
+          break;
+        }
         case 'trendline': {
           const x1 = (hd.start.slotIndex - vp.firstSlotIndex) * sw + sw / 2;
           const x2 = (hd.end.slotIndex   - vp.firstSlotIndex) * sw + sw / 2;
@@ -1905,6 +2107,10 @@ export function renderDrawings(
         ctx.moveTo(x, 0);
         ctx.lineTo(x, ph);
         ctx.stroke();
+        break;
+      }
+      case 'cyclic': {
+        _renderCyclicLines(ctx, d, vp, sw, pw, ph, rc.theme);
         break;
       }
       case 'trendline': {
@@ -2763,12 +2969,25 @@ export function renderEphemerisMarkers(
 
   ctx.save();
 
+  const fontSize = 9;
+  const labelBoxH = fontSize + 4;
+  const rowGap = 2;
+  ctx.font = `${fontSize}px -apple-system, BlinkMacSystemFont, sans-serif`;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'top';
+
+  // Track occupied label bands per screen-X so overlapping markers stack
+  // vertically instead of drawing on top of each other. Two markers count
+  // as "same column" when their X differs by less than half a slot.
+  const columnStackY = new Map<number, number>();
+  const COLUMN_BUCKET = Math.max(1, Math.round(sw / 2));
+
   for (const marker of markers) {
     const x = slotToX(marker.slotIndex, vp) + sw / 2;
     // Skip if not visible
     if (x < 0 || x > vp.width - vp.priceAxisWidth) continue;
 
-    // Vertical line
+    // Vertical line — always drawn at the marker's exact X, even if labels stack.
     ctx.strokeStyle = marker.color;
     ctx.lineWidth = 1;
     ctx.globalAlpha = 0.7;
@@ -2780,21 +2999,19 @@ export function renderEphemerisMarkers(
     ctx.setLineDash([]);
     ctx.globalAlpha = 1;
 
-    // Label at top
-    const fontSize = 9;
-    ctx.font = `${fontSize}px -apple-system, BlinkMacSystemFont, sans-serif`;
-    ctx.fillStyle = marker.color;
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'top';
+    // Label stacking: bucket by X-column, place each subsequent label below.
+    const bucket = Math.round(x / COLUMN_BUCKET);
+    const stackRow = columnStackY.get(bucket) ?? 0;
+    columnStackY.set(bucket, stackRow + 1);
+    const ly = 4 + stackRow * (labelBoxH + rowGap);
 
     // Background for readability
     const labelText = marker.label;
     const tw = ctx.measureText(labelText).width + 6;
     const lx = x - tw / 2;
-    const ly = 4;
     ctx.globalAlpha = 0.85;
     ctx.fillStyle = rc.theme.background;
-    ctx.fillRect(lx, ly, tw, fontSize + 4);
+    ctx.fillRect(lx, ly, tw, labelBoxH);
     ctx.globalAlpha = 1;
     ctx.fillStyle = marker.color;
     ctx.fillText(labelText, x, ly + 2);

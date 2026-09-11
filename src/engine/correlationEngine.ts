@@ -162,26 +162,34 @@ export function computeCorrelation(
   primarySlots: CandleSlot[],
   projectedCandles: ProjectedCandle[],
 ): CorrelationResult | null {
-  // Build aligned close-price pairs
-  const pairs: [number, number][] = [];
+  // Build aligned pairs, keeping the primary slot index so we can enforce
+  // that returns are computed between *consecutive* slots. Without this,
+  // a Fri→Mon pair on a US equity chart is treated as a single-bar return
+  // (and any misalignment across markets with different calendars silently
+  // pollutes the sum with garbage returns).
+  const pairs: Array<{ primary: number; overlay: number; idx: number }> = [];
   for (const pc of projectedCandles) {
     const idx = pc.projectedSlotIndex;
     if (idx < 0 || idx >= primarySlots.length) continue;
+    // projectedSlotIndex may be fractional for extrapolated future slots;
+    // only integer indices correspond to real slot data.
+    if (!Number.isInteger(idx)) continue;
     const slot = primarySlots[idx];
     if (!slot || !slot.candle) continue;
-    pairs.push([slot.candle.close, pc.candle.close]);
+    pairs.push({ primary: slot.candle.close, overlay: pc.candle.close, idx });
   }
 
-  if (pairs.length < 3) return null; // need enough points
+  if (pairs.length < 3) return null;
 
-  // Convert to percent-change (returns) series for meaningful correlation
+  // Only compute a return when both series have data for two consecutive
+  // slot indices; skip across any gap (weekend, holiday, missing bar).
   const primaryReturns: number[] = [];
   const overlayReturns: number[] = [];
   for (let i = 1; i < pairs.length; i++) {
-    const pRet = (pairs[i][0] - pairs[i - 1][0]) / pairs[i - 1][0];
-    const oRet = (pairs[i][1] - pairs[i - 1][1]) / pairs[i - 1][1];
-    primaryReturns.push(pRet);
-    overlayReturns.push(oRet);
+    if (pairs[i].idx !== pairs[i - 1].idx + 1) continue;
+    if (pairs[i - 1].primary === 0 || pairs[i - 1].overlay === 0) continue;
+    primaryReturns.push((pairs[i].primary - pairs[i - 1].primary) / pairs[i - 1].primary);
+    overlayReturns.push((pairs[i].overlay - pairs[i - 1].overlay) / pairs[i - 1].overlay);
   }
 
   if (primaryReturns.length < 2) return null;

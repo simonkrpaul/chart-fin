@@ -75,10 +75,12 @@ function _emaSmoothArray(data: (number | null)[], period: number): (number | nul
 }
 
 // Filters empty-gap (weekend/holiday) slots out and re-indexes when the user
-// has toggled gap visibility off. Returned array is a new object each call.
+// has toggled gap visibility off. Also drops empty trading slots (real data
+// gaps, e.g. a missing Kaggle row) so gaps_off never leaves blank space.
+// Returned array is a new object each call.
 function _applyGapVisibility(slots: CandleSlot[], showEmpty: boolean): CandleSlot[] {
   if (showEmpty) return slots;
-  const kept = slots.filter(s => s.status !== 'weekend' && s.status !== 'holiday');
+  const kept = slots.filter(s => s.candle !== null);
   return kept.map((s, i) => ({ ...s, slotIndex: i }));
 }
 
@@ -1232,7 +1234,11 @@ export function createChartStore(panelId: string = 'p1'): StoreApi<ChartState & 
     // ────────────────────────────────────────────────────────────────────────
 
     setEphemerisMarkers: (markers) => {
-      // Resolve slot indices from timestamps, extrapolating beyond data range
+      // Resolve slot indices from timestamps using *fractional* slot positions.
+      // Nearest-slot rounding causes every intraday event on the same day to
+      // collapse onto a single daily bar (all Aug-17 aspects would stack on
+      // the Aug-17 12:00 UTC slot). Interpolating between the two bracketing
+      // slots gives each aspect its exact intraday X even on a coarse TF.
       const { primarySlots } = get();
       if (primarySlots.length === 0) { set(state => { state.ephemerisMarkers = markers; }); return; }
 
@@ -1244,21 +1250,31 @@ export function createChartStore(panelId: string = 'p1'): StoreApi<ChartState & 
       const resolved = markers.map(m => {
         let slotIndex: number;
         if (m.timestamp <= firstTs) {
-          slotIndex = -Math.round((firstTs - m.timestamp) / avgInterval);
+          // Before data start – project backward using the average interval.
+          slotIndex = -(firstTs - m.timestamp) / avgInterval;
         } else if (m.timestamp >= lastTs) {
-          slotIndex = lastIdx + Math.round((m.timestamp - lastTs) / avgInterval);
+          // After data end – project forward using the average interval.
+          slotIndex = lastIdx + (m.timestamp - lastTs) / avgInterval;
         } else {
-          // Binary search within range
-          let bestIdx = 0, bestDiff = Infinity;
+          // Inside data range – binary-search the *previous* slot, then
+          // interpolate between prev and next by timestamp fraction.
           let lo = 0, hi = lastIdx;
-          while (lo <= hi) {
-            const mid = (lo + hi) >>> 1;
-            const diff = Math.abs(primarySlots[mid].timestamp - m.timestamp);
-            if (diff < bestDiff) { bestDiff = diff; bestIdx = mid; }
-            if (primarySlots[mid].timestamp < m.timestamp) lo = mid + 1;
+          while (lo < hi) {
+            const mid = (lo + hi + 1) >>> 1;
+            if (primarySlots[mid].timestamp <= m.timestamp) lo = mid;
             else hi = mid - 1;
           }
-          slotIndex = bestIdx;
+          const prevIdx = lo;
+          const prevTs  = primarySlots[prevIdx].timestamp;
+          if (prevIdx === lastIdx) {
+            slotIndex = prevIdx + (m.timestamp - prevTs) / avgInterval;
+          } else {
+            const nextTs = primarySlots[prevIdx + 1].timestamp;
+            const span   = nextTs - prevTs;
+            slotIndex = span > 0
+              ? prevIdx + (m.timestamp - prevTs) / span
+              : prevIdx;
+          }
         }
         return { ...m, slotIndex };
       });
