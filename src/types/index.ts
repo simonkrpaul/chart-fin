@@ -270,6 +270,7 @@ export type DrawingTool =
   | 'rectangle'
   | 'measurement'
   | 'fibonacci'
+  | 'cyclic'
   | 'long_position'
   | 'short_position'
   | 'bar_pattern'
@@ -339,6 +340,24 @@ export interface FibonacciDrawing extends BaseDrawing {
 
 export const FIBONACCI_DEFAULT_LEVELS = [0, 0.236, 0.382, 0.5, 0.618, 0.786, 1];
 
+/**
+ * Cyclic Lines — a series of equally-spaced vertical lines.
+ * Two-click creation: the first click places the anchor, the second click
+ * defines the cycle interval (in slots). The set extends `count` cycles
+ * forward and/or backward. Drag the anchor slot to slide the whole set.
+ */
+export interface CyclicLinesDrawing extends BaseDrawing {
+  tool: 'cyclic';
+  anchor: DrawingPoint;
+  /** Distance between consecutive lines, in slot indices. Always ≥ 1. */
+  intervalBars: number;
+  /** Number of lines drawn on each active side (forward + backward). */
+  count: number;
+  direction: 'forward' | 'backward' | 'both';
+  /** Show "n × interval" text labels above each line. */
+  showLabels: boolean;
+}
+
 export interface PositionDrawing extends BaseDrawing {
   tool: 'long_position' | 'short_position';
   entry: DrawingPoint;
@@ -358,6 +377,7 @@ export type Drawing =
   | RectangleDrawing
   | MeasurementDrawing
   | FibonacciDrawing
+  | CyclicLinesDrawing
   | PositionDrawing;
 
 // ─────────────────────────────────────────────────────────────────────────────

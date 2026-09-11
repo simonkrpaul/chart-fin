@@ -392,6 +392,19 @@ export const ChartCanvas: React.FC<Props> = ({ width, height }) => {
             updateDrawing(dd.id, { slotIndex: newSi, timestamp: primarySlots[newSi]?.timestamp ?? orig.timestamp } as any);
             break;
           }
+          case 'cyclic': {
+            // Slide the whole cyclic set by moving the anchor. Interval and
+            // count stay put — the entire ladder of lines shifts together.
+            const newAnchorSi = orig.anchor.slotIndex + slotDelta;
+            const newAnchor = {
+              ...orig.anchor,
+              slotIndex: newAnchorSi,
+              price: orig.anchor.price + priceDelta,
+              timestamp: primarySlots[newAnchorSi]?.timestamp ?? orig.anchor.timestamp,
+            };
+            updateDrawing(dd.id, { anchor: newAnchor } as any);
+            break;
+          }
           case 'rectangle': {
             const newTL = { ...orig.topLeft, price: orig.topLeft.price + priceDelta, slotIndex: orig.topLeft.slotIndex + slotDelta };
             const newBR = { ...orig.bottomRight, price: orig.bottomRight.price + priceDelta, slotIndex: orig.bottomRight.slotIndex + slotDelta };
@@ -510,6 +523,17 @@ export const ChartCanvas: React.FC<Props> = ({ width, height }) => {
               updated.riskReward = risk > 0 ? reward / risk : 0;
             }
             break;
+          case 'cyclic': {
+            // Second-click preview: interval = |cursor slotIndex − anchor|.
+            // Sign of drag sets direction (forward if right of anchor,
+            // backward if left, both if drag straddles).
+            const anchor = updated.anchor as { slotIndex: number };
+            const delta = si - anchor.slotIndex;
+            const interval = Math.max(1, Math.abs(delta));
+            updated.intervalBars = interval;
+            updated.direction = delta >= 0 ? 'forward' : 'backward';
+            break;
+          }
         }
         // For measurement: embed live stats so the canvas badge renders during drag
         if (activeDrawingTool === 'measurement' && updated.start) {
@@ -674,6 +698,22 @@ export const ChartCanvas: React.FC<Props> = ({ width, height }) => {
           break;
         case 'short_position':
           startDrawing({ ...base, tool: 'short_position', entry: p, end: p, tpPrice: price, slPrice: price, riskReward: 0 });
+          justStartedDrawing.current = true;
+          break;
+        case 'cyclic':
+          // Two-click flow: mousedown here places the anchor, mousemove
+          // previews the second click's interval, mouseup commits. Default
+          // count=20, forward-only; user can edit these on the settings panel
+          // or drag the anchor to slide the whole set later.
+          startDrawing({
+            ...base,
+            tool: 'cyclic',
+            anchor: p,
+            intervalBars: 20,
+            count: 20,
+            direction: 'forward',
+            showLabels: true,
+          });
           justStartedDrawing.current = true;
           break;
       }

@@ -88,14 +88,17 @@ export function buildOffsetOverlay(
   // 24/7 data sources (crypto) arrive at midnight UTC.  The resulting
   // ~14.5 h gap is larger than the 12 h timestamp tolerance, so the
   // nearest-slot binary search always misses on weekdays.
+  //
+  // Key format must be zero-padded ISO ("YYYY-MM-DD") — same as
+  // normalizationEngine.utcDateStr — otherwise raw and slot keys diverge.
   const dateSlotMap = new Map<string, number>();
   if (timeframe === '1d') {
     for (let i = 0; i < primarySlots.length; i++) {
       const d = new Date(primarySlots[i].timestamp);
-      dateSlotMap.set(
-        `${d.getUTCFullYear()}-${d.getUTCMonth()}-${d.getUTCDate()}`,
-        i,
-      );
+      const key = `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}-${String(d.getUTCDate()).padStart(2, '0')}`;
+      // First-slot-wins per date so trading slots (which come before weekend
+      // slots for the same UTC date in edge cases) claim the key.
+      if (!dateSlotMap.has(key)) dateSlotMap.set(key, i);
     }
   }
 
@@ -117,9 +120,14 @@ export function buildOffsetOverlay(
 
     let projectedSlotIndex: number;
     if (timeframe === '1d') {
-      // Period-based lookup: match by UTC calendar date to avoid session-vs-midnight gap
+      // Period-based lookup: match by UTC calendar date to avoid session-vs-midnight gap.
+      // We *do not* skip weekend/holiday slots here: the overlay must render
+      // continuously even where the primary chart has a gap placeholder, so
+      // that a 24/7 overlay (e.g. BTC) plots on Sat/Sun of an equity chart
+      // and any offset stays visually continuous across the gap. Statistical
+      // correlation still ignores these bars (see correlationEngine).
       const pd = new Date(projectedTs);
-      const key = `${pd.getUTCFullYear()}-${pd.getUTCMonth()}-${pd.getUTCDate()}`;
+      const key = `${pd.getUTCFullYear()}-${String(pd.getUTCMonth() + 1).padStart(2, '0')}-${String(pd.getUTCDate()).padStart(2, '0')}`;
       const found = dateSlotMap.get(key);
       if (found !== undefined) {
         projectedSlotIndex = found;

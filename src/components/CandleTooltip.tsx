@@ -48,28 +48,33 @@ export const CandleTooltip: React.FC = () => {
   // Use the resolved (possibly extrapolated) timestamp from crosshair state
   const displayTs = crosshair.timestamp || slot?.timestamp || 0;
   const tz = session.timezone;
+  const isDailyOrCoarser = ['1d', '1w', '1M'].includes(timeframe);
 
-  // Format timestamp in the selected timezone
+  // Format timestamp.
+  //   • D/W/M slots are anchored at 12:00 UTC of the trading date, so
+  //     formatting in UTC always shows the correct calendar day for every
+  //     display tz (Sydney, NY, LA, UTC …).
+  //   • Intraday slots carry the exact market timestamp; format in the
+  //     session tz so wall-clock times match the session open/close.
   function formatTime(ts: number): string {
     if (!ts) return '—';
     const d = new Date(ts);
-    const isIntraday = !['1d', '1w', '1M'].includes(timeframe);
-    if (isIntraday) {
-      return d.toLocaleString('en-US', {
-        timeZone: tz,
+    if (isDailyOrCoarser) {
+      return d.toLocaleDateString('en-US', {
+        timeZone: 'UTC',
         month: 'short',
         day: 'numeric',
         year: 'numeric',
-        hour: '2-digit',
-        minute: '2-digit',
-        hour12: false,
       });
     }
-    return d.toLocaleDateString('en-US', {
+    return d.toLocaleString('en-US', {
       timeZone: tz,
       month: 'short',
       day: 'numeric',
       year: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: false,
     });
   }
 
@@ -86,10 +91,14 @@ export const CandleTooltip: React.FC = () => {
   const color = isUp ? bull : bear;
   const pct = ((c.close - c.open) / c.open * 100).toFixed(2);
 
+  // For D/W/M use the slot's noon-UTC timestamp (session-agnostic anchor);
+  // for intraday use the raw candle's own timestamp.
+  const labelTs = isDailyOrCoarser ? (slot?.timestamp ?? c.timestamp) : c.timestamp;
+
   return (
     <div style={{ position: 'absolute', top: 8, left: 8, background: bg, color: text, padding: '6px 10px', borderRadius: 4, ...mono, lineHeight: 1.6, boxShadow: '0 2px 8px rgba(0,0,0,0.3)' }}>
       {header}
-      <div style={{ opacity: 0.6, fontSize: 10 }}>{formatTime(c.timestamp)}</div>
+      <div style={{ opacity: 0.6, fontSize: 10 }}>{formatTime(labelTs)}</div>
       <div>
         O <span style={{ color }}>{c.open.toFixed(2)}</span>{' '}
         H <span style={{ color: bull }}>{c.high.toFixed(2)}</span>{' '}

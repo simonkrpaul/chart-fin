@@ -392,16 +392,136 @@ python3 -c "import swisseph as swe; swe.set_ephe_path('./ephe'); print(swe.calc_
 
 ---
 
+## Features
 
+Everything is native TypeScript + a single custom canvas renderer — no
+charting library — so the pipeline is inspectable end-to-end.
 
-- Candlestick chart with volume sub-pane
-- Timeframes: 5m, 10m, 15m, 1h, 4h
-- Indicators: SMA, EMA, VWAP, RSI, MACD, Bollinger Bands, ATR
-- Drawing tools: trendline, horizontal line, vertical line, rectangle, measurement tool
-- Undo / redo for drawings (`⌘Z` / `⌘⇧Z`)
-- Historical offset overlays — overlay 10/20/30/40/50-day-ago price action on the current chart
-- Calendar-day alignment (weekends and holidays are preserved, not collapsed)
-- Dark / light theme toggle
+### Charts & data
+
+- **Candlestick chart** with volume sub-pane, price scale (autoFit + manual pan/scale), hover crosshair with persistent OHLC tooltip.
+- **Timeframes** — `1m`, `5m`, `10m`, `15m`, `1h`, `4h`, `1d`, `1w`, `1M`. Coarse timeframes auto-resample from the finest loaded base data.
+- **Multi-market ingestion** via a unified `ingestionService` with 5 adapters:
+  - **Bybit** REST + WebSocket (BTC/USDT etc., minute-to-week bulk sync in [`scripts/bybit_sync.py`](scripts/bybit_sync.py))
+  - **Alpaca** stocks + crypto (SDK-based, S&P 500 + crypto majors via [`scripts/download_alpaca.py`](scripts/download_alpaca.py))
+  - **Kaggle** bulk S&P 500 daily (skip / append / overwrite modes, [`scripts/import_kaggle_sp500.py`](scripts/import_kaggle_sp500.py))
+  - **CSV** file / URL loader
+  - **Mock** deterministic random-walk generator (for offline / demo)
+- **IndexedDB persistence** (`chart-fin-db`, via `idb`) — markets, symbols, OHLCV, layouts, settings. Manifest-cache-aware ingest, single-flight write locks, ~50 k-candle chunking with fire-and-forget puts.
+- **Chart picker** listing all locally-cached series and pending manifest entries, with live progress updates during background ingest.
+- **TF-aware loader** — picking `1d` when the store has `1m` transparently resamples on the fly.
+
+### Time & calendar engine
+
+- **UTC-first daily / weekly / monthly slot generation** — every raw daily bar (Kaggle 00:00 UTC, Bybit 00:00 UTC, Alpaca 00:00 UTC) maps 1-to-1 to a slot regardless of the user's session timezone. Slot timestamps are anchored at 12:00 UTC so any display tz (Sydney, NY, LA, UTC) renders the correct calendar date.
+- **Session-tz-aware intraday** — 5 m / 15 m / 1 h grids know NYSE 09:30–16:00 ET, half-day early closes, ASX / LSE / futures sessions.
+- **Uniform 24 h intraday grid for non-continuous markets** — US equities and other session markets now fill the overnight window with `outside_session` placeholder slots so intraday offset overlays render continuously through the whole week; toggle "Show empty gap slots" off to collapse back to a compact session-only ribbon.
+- **Gap handling** — weekends, market holidays and half-days are separate slot statuses with underscore-glyph placeholders (D/W/M) that never collapse silently. Missing trading bars (real data gaps such as a stranded Kaggle row) are treated identically.
+
+### Indicators
+
+Configured & rendered live via the `IndicatorPanel`. Each indicator persists in the current layout.
+
+| Indicator | Notes |
+|---|---|
+| **SMA / EMA / VWAP** | Multiple simultaneous instances, per-instance period + color |
+| **RSI / MACD / ATR** | Rendered in a sub-pane |
+| **Bollinger Bands** | Configurable period + std-dev |
+| **SWING_HL** | Pivot swing highs / lows with configurable L/R window and %-move labels |
+| **SUPPORT_RESISTANCE** | Cluster detection from historic pivots |
+| **SESSIONS** | Tokyo / London / New York / Sydney overlay bands |
+| **MOON_SIGNALS** | Buy/Sell markers from Moon-Ketu / Moon-Rahu conjunction dates; **rolls forward through gaps** so a signal on a weekend / market holiday attaches to the next trading candle |
+| **HIGH_LOW_LEVELS** | Previous-day / previous-week / previous-month H/L lines labelled **PDH / PDL / PWH / PWL / PMH / PML**, plotted **on the next period's bar range** (yesterday's H/L on today, this week's H/L trailing off past the last bar). Sessions render on their own day |
+| **DYNAMIC_GRID** | Horizontal grid at price multiples of `n`; diagonals between two anchor dates |
+| **WICK_REVERSAL** | Wick-rejection buy/sell signals |
+| **TRADE_SIGNALS** | Import from CSV / trade log |
+
+### Historical offset overlays (Anchored Comparison)
+
+- Overlay any prior window of the same series (or a **cross-market series**) on top of the current chart at an arbitrary calendar-day offset.
+- **UTC-date matching** on D/W/M so overlays are exact bar-to-bar, no session-open drift.
+- **Continuous across weekend / holiday placeholders** — a Sat/Sun/Labor-Day bar from a 24/7 overlay (BTC) renders on the primary equity chart's placeholder column, so the overlay is visually unbroken.
+- Multiple simultaneous overlays with per-overlay color, dashed / line-only styles, normalization modes (`raw`, `percent`, `index=100`, `normalized`).
+- **Correlation coefficient** shown per overlay — computed from returns **between consecutive slot indices only**, so Fri→Mon and other gap crossings never pollute the statistic.
+
+### Correlation Scanner
+
+- Scans **1 – 5000 day** offsets to find the best-correlating historical window against the current chart's last N days.
+- Returns / swing-point modes.
+- Independent min/max offset controls (skip trivially-similar recent offsets, cap the search space).
+- One-click "apply as overlay" from any scanner result.
+
+### Backtest engine
+
+- Per-strategy config UI (`BacktestPanel`) — pick timeframe, capital, position sizing, entry / exit rules.
+- Signals rendered on the main pane; equity curve + drawdown in the report drawer.
+- Trade log stream integrates with the imported CSV Trade Journal.
+
+### Bar replay
+
+- Scrub / play / step through history bar-by-bar at 1× – 60× speed.
+- Indicators and overlays recompute against the replay cursor so signals look exactly as they did in real time.
+
+### Cycle Combiner
+
+- Sum / product of arbitrary sine cycles + astronomical cycles; forward-project a synthetic price series to compare against the primary.
+- Cycles are added / edited in the [`CycleCombinerPanel`](src/components/CycleCombinerPanel.tsx).
+
+### Ephemeris integration
+
+Requires the local ephemeris server ([`scripts/ephemeris_server.py`](scripts/ephemeris_server.py), pyswisseph + `.se1` data files).
+
+- **Aspect scanner** — any two planets, orb, ayanamsa (Lahiri / Raman / Krishnamurti / Fagan-Bradley / Tropical). Markers appear on the primary chart at each hit.
+- **Retrograde periods** — turns each retrograde window into a coloured transit zone.
+- **Ascendant aspects** for **Rahu / Ketu** — intraday scanner detects **8 standard aspects to the Ascendant** (0° Conjunction / Rising, 60° Sextile, 90° Square, 120° Trine, 180° Opposition, 240° / 270° / 300° reflex angles) at any lat/lon. Independent orb-state per aspect; markers land at exact UTC intraday times with `Rahu Square (R) ASC` style labels.
+- **Helio-transit scanner** — Sun-relative heliocentric planet angles for cycle work.
+
+### Drawings
+
+- Trendline, horizontal / vertical line, rectangle, Fibonacci retracement, measurement tool.
+- Full **undo / redo history** (⌘Z / ⌘⇧Z).
+- **Range measurement overlay** shows price / time / bars / % move / annualised return between two clicks.
+
+### Multi-panel layouts (TradingView-style)
+
+- Split the workspace into `1`, `2` or `4` chart panels via the `LayoutGrid` / `LayoutManager`.
+- Each panel is an independent chart store — different symbol, timeframe, indicators.
+- **Save / load layouts** — series identity, indicators, overlays, drawings, viewport, price scale, theme all round-trip through IndexedDB.
+- **Auto-restore last session** on boot; single-flight guards protect against StrictMode double-mounts.
+
+### Timezone
+
+- IANA `TimezoneSelector` — change display tz on the fly for intraday; D/W/M always render as UTC calendar dates for consistency across users.
+
+### Data ingestion utilities
+
+Scripts in `scripts/`:
+
+| Script | Purpose |
+|---|---|
+| `bybit_sync.py` | Bulk Bybit BTC/USDT + append-only incremental daily update |
+| `download_btc.py` | Kaggle BTC historical → normalized `btc_*.csv` |
+| `download_alpaca.py` | Alpaca stock (S&P 500) & crypto majors → `public/data/markets/…` |
+| `import_kaggle_sp500.py` | Kaggle S&P 500 daily → per-symbol CSVs; skip / append / overwrite modes; auto raises OS fd limit on macOS |
+| `import_market.py` | Generic per-market normalized import |
+| `mock_data.py` | Deterministic OHLCV walk for offline demo |
+| `fill_gaps.py` | Bybit-only gap-filler for historical holes |
+| `download_kaggle_btc.py` | Kaggle Bitcoin dataset downloader |
+| `compute_all_transits.py` | Batch precompute planetary transit windows |
+
+### Offline commit transport (PDF round-trip)
+
+For environments where `git push` is blocked by corporate proxy / DLP scanners and only PDF attachments are allowed. All three scripts are byte-for-byte identical after round-trip — see [`docs/patch-round-trip.md`](docs/patch-round-trip.md).
+
+| Script | Direction | Platform |
+|---|---|---|
+| [`scripts/patch-to-pdf.sh`](scripts/patch-to-pdf.sh) | commits → base64 PDF | macOS / Linux |
+| [`scripts/pdf-to-patch.sh`](scripts/pdf-to-patch.sh) | PDF → `git am` | macOS / Linux |
+| [`scripts/pdf_to_patch.py`](scripts/pdf_to_patch.py) | PDF → `git am` | Cross-platform (Windows / macOS / Linux, auto-installs `pypdf`) |
+
+### Theming
+
+- Dark / light theme toggle in the toolbar; canvas theme tokens picked up by every renderer pass; theme is layout-persisted.
 
 ## Keyboard shortcuts
 
@@ -415,7 +535,13 @@ python3 -c "import swisseph as swe; swe.set_ephe_path('./ephe'); print(swe.calc_
 | `⌘Z` | Undo |
 | `⌘⇧Z` | Redo |
 
-See [ARCHITECTURE.md](ARCHITECTURE.md) for the full system design.
+## Further reading
+
+- [ARCHITECTURE.md](ARCHITECTURE.md) — module map & data-flow diagrams.
+- [MIGRATION.md](MIGRATION.md) — feature-by-feature engineering log.
+- [docs/data-ingestion.md](docs/data-ingestion.md) — Bybit / Alpaca / Kaggle ingestion cookbook.
+- [docs/patch-round-trip.md](docs/patch-round-trip.md) — corporate-safe commit transport.
+
 
 ## React Compiler
 

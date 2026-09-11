@@ -27,6 +27,38 @@ const AYANAMSAS = ['Lahiri', 'Raman', 'Krishnamurti', 'Fagan/Bradley', 'Tropical
 
 const MARKER_COLORS = ['#e040fb', '#00e5ff', '#ffab00', '#76ff03', '#ff1744', '#d500f9'];
 
+// Common financial-market cities for the location picker in the Rising scan.
+// Ascendant timing shifts by ~1 h per 15° of longitude, so the correct
+// observer location matters. Values are geodetic decimal degrees.
+// UTC has no physical location — Greenwich Royal Observatory is the
+// astronomical convention (prime meridian, 0° longitude), so it's used
+// as the anchor when the caller wants "UTC-observer" semantics.
+const LOCATIONS: { label: string; lat: number; lon: number }[] = [
+  { label: 'UTC / Greenwich',    lat: 51.4779, lon: 0.0000 },
+  { label: 'Equator (0°, 0°)',   lat: 0.0000,  lon: 0.0000 },
+  { label: 'New York',    lat: 40.7128,  lon: -74.0060 },
+  { label: 'Chicago',     lat: 41.8781,  lon: -87.6298 },
+  { label: 'Los Angeles', lat: 34.0522,  lon: -118.2437 },
+  { label: 'Toronto',     lat: 43.6532,  lon: -79.3832 },
+  { label: 'São Paulo',   lat: -23.5505, lon: -46.6333 },
+  { label: 'London',      lat: 51.5074,  lon: -0.1278 },
+  { label: 'Paris',       lat: 48.8566,  lon: 2.3522 },
+  { label: 'Frankfurt',   lat: 50.1109,  lon: 8.6821 },
+  { label: 'Zurich',      lat: 47.3769,  lon: 8.5417 },
+  { label: 'Moscow',      lat: 55.7558,  lon: 37.6173 },
+  { label: 'Dubai',       lat: 25.2048,  lon: 55.2708 },
+  { label: 'Mumbai',      lat: 19.0760,  lon: 72.8777 },
+  { label: 'Delhi',       lat: 28.6139,  lon: 77.2090 },
+  { label: 'Bengaluru',   lat: 12.9716,  lon: 77.5946 },
+  { label: 'Singapore',   lat: 1.3521,   lon: 103.8198 },
+  { label: 'Hong Kong',   lat: 22.3193,  lon: 114.1694 },
+  { label: 'Shanghai',    lat: 31.2304,  lon: 121.4737 },
+  { label: 'Tokyo',       lat: 35.6762,  lon: 139.6503 },
+  { label: 'Seoul',       lat: 37.5665,  lon: 126.9780 },
+  { label: 'Sydney',      lat: -33.8688, lon: 151.2093 },
+  { label: 'Auckland',    lat: -36.8485, lon: 174.7633 },
+];
+
 const RANGE_PRESETS = [
   { label: '1Y', years: 1 },
   { label: '2Y', years: 2 },
@@ -47,6 +79,15 @@ function yearsAgo(n: number): string {
   return toDateStr(d);
 }
 
+// Match a city preset within 0.01° tolerance so hand-edited coords stay
+// labelled "Custom" while presets reflect the picked city.
+function matchLocation(lat: number, lon: number): string {
+  const hit = LOCATIONS.find(
+    l => Math.abs(l.lat - lat) < 0.01 && Math.abs(l.lon - lon) < 0.01,
+  );
+  return hit?.label ?? 'Custom';
+}
+
 export const EphemerisPanel: React.FC = () => {
   const {
     ephemerisMarkers,
@@ -60,6 +101,7 @@ export const EphemerisPanel: React.FC = () => {
     toggleTransitZoneGroup,
     clearAllTransitZones,
     theme,
+    timeframe,
   } = useChartStore();
 
   // Form state
@@ -80,9 +122,14 @@ export const EphemerisPanel: React.FC = () => {
   const [endDate, setEndDate] = useState(toDateStr(new Date()));
 
   // Rising-specific
-  const [node, setNode] = useState('Rahu');
+  // "risingPlanet" is used for the Planet ↔ Ascendant scan (was `node`).
+  // Keeping the state name generic so any planet can be picked, not just nodes.
+  const [risingPlanet, setRisingPlanet] = useState('Rahu');
   const [lat, setLat] = useState(28.6139);
   const [lon, setLon] = useState(77.209);
+  // Aspects the planet makes to the Ascendant. Default = full standard set
+  // (conjunction + sextile + square + trine + opposition + 3 reflex angles).
+  const [risingAspects, setRisingAspects] = useState<number[]>([0, 60, 90, 120, 180, 240, 270, 300]);
 
   const bg = theme === 'dark' ? '#1e222d' : '#f0f3fa';
   const text = theme === 'dark' ? '#d1d4dc' : '#131722';
@@ -142,6 +189,7 @@ export const EphemerisPanel: React.FC = () => {
 
   async function fetchRisingDates() {
     if (!startDate || !endDate) { setError('Set date range'); return; }
+    if (risingAspects.length === 0) { setError('Select at least one aspect'); return; }
 
     setLoading(true);
     setError('');
@@ -152,7 +200,8 @@ export const EphemerisPanel: React.FC = () => {
         body: JSON.stringify({
           start_date: startDate,
           end_date: endDate,
-          node,
+          planet: risingPlanet,
+          aspects: risingAspects,
           orb,
           ayanamsa,
           step_minutes: stepMinutes,
@@ -164,9 +213,14 @@ export const EphemerisPanel: React.FC = () => {
       const markers: EphemerisMarker[] = (data.dates || []).map((d: any) => ({
         timestamp: d.timestamp,
         slotIndex: 0,
-        label: d.label || `${node} Rising`,
+        label: d.label || `${risingPlanet} ${d.aspect_deg ?? ''}° ASC`,
         color,
-        meta: { asc_deg: d.asc_deg, node_deg: d.node_deg },
+        meta: {
+          asc_deg: d.asc_deg,
+          planet_deg: d.planet_deg,
+          aspect_deg: d.aspect_deg,
+          delta_deg: d.delta_deg,
+        },
       }));
       markers.sort((a, b) => b.timestamp - a.timestamp);
       setEphemerisMarkers([...ephemerisMarkers, ...markers]);
@@ -290,22 +344,123 @@ export const EphemerisPanel: React.FC = () => {
 
       {mode === 'rising' && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-          <label style={{ fontSize: 10, opacity: 0.7 }}>Node</label>
-          <select value={node} onChange={e => setNode(e.target.value)} style={inp}>
-            <option value="Rahu">Rahu</option>
-            <option value="Ketu">Ketu</option>
+          <label style={{ fontSize: 10, opacity: 0.7 }}>Planet ↔ Ascendant</label>
+          <select value={risingPlanet} onChange={e => setRisingPlanet(e.target.value)} style={inp}>
+            {PLANETS.map(p => <option key={p} value={p}>{p}</option>)}
           </select>
 
+          <label style={{ fontSize: 10, opacity: 0.7, marginTop: 2 }}>
+            Observer location · <span style={{ opacity: 0.6 }}>{matchLocation(lat, lon)}</span>
+          </label>
+          <select
+            value={matchLocation(lat, lon)}
+            onChange={e => {
+              const loc = LOCATIONS.find(l => l.label === e.target.value);
+              if (loc) { setLat(loc.lat); setLon(loc.lon); }
+            }}
+            style={inp}
+          >
+            {matchLocation(lat, lon) === 'Custom' && <option value="Custom">Custom ({lat.toFixed(2)}, {lon.toFixed(2)})</option>}
+            {LOCATIONS.map(l => (
+              <option key={l.label} value={l.label}>
+                {l.label} ({l.lat.toFixed(2)}, {l.lon.toFixed(2)})
+              </option>
+            ))}
+          </select>
           <div style={{ display: 'flex', gap: 4 }}>
             <div style={{ flex: 1 }}>
-              <label style={{ fontSize: 10, opacity: 0.7 }}>Lat</label>
+              <label style={{ fontSize: 9, opacity: 0.6 }}>Lat</label>
               <input type="number" step="0.01" value={lat} onChange={e => setLat(Number(e.target.value))} style={inp} />
             </div>
             <div style={{ flex: 1 }}>
-              <label style={{ fontSize: 10, opacity: 0.7 }}>Lon</label>
+              <label style={{ fontSize: 9, opacity: 0.6 }}>Lon</label>
               <input type="number" step="0.01" value={lon} onChange={e => setLon(Number(e.target.value))} style={inp} />
             </div>
           </div>
+
+          <div>
+            <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginTop: 4 }}>
+              <label style={{ fontSize: 10, opacity: 0.7 }}>Aspects to ASC</label>
+              <button
+                type="button"
+                onClick={() => setRisingAspects([0, 60, 90, 120, 180, 240, 270, 300])}
+                style={{ ...inp, width: 'auto', padding: '1px 6px', cursor: 'pointer', fontSize: 9 }}
+              >all</button>
+              <button
+                type="button"
+                onClick={() => setRisingAspects([0])}
+                style={{ ...inp, width: 'auto', padding: '1px 6px', cursor: 'pointer', fontSize: 9 }}
+              >0° only</button>
+              <button
+                type="button"
+                onClick={() => setRisingAspects([])}
+                style={{ ...inp, width: 'auto', padding: '1px 6px', cursor: 'pointer', fontSize: 9 }}
+              >none</button>
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 3, marginTop: 4 }}>
+              {[
+                { v: 0, label: '☌ 0° Conj / Rising' },
+                { v: 60, label: '⚹ 60° Sextile' },
+                { v: 90, label: '□ 90° Square' },
+                { v: 120, label: '△ 120° Trine' },
+                { v: 180, label: '☍ 180° Opp' },
+                { v: 240, label: '△ 240° Trine (R)' },
+                { v: 270, label: '□ 270° Sq (R)' },
+                { v: 300, label: '⚹ 300° Sxt (R)' },
+              ].map(({ v, label }) => (
+                <label key={v} style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 10, cursor: 'pointer' }}>
+                  <input
+                    type="checkbox"
+                    checked={risingAspects.includes(v)}
+                    onChange={() => setRisingAspects(cur =>
+                      cur.includes(v) ? cur.filter(x => x !== v) : [...cur, v].sort((a, b) => a - b),
+                    )}
+                  />
+                  {label}
+                </label>
+              ))}
+            </div>
+          </div>
+
+          {/* Warn if the current chart TF cannot spatially resolve intraday
+              aspects — 1d/1w/1M charts collapse all same-day events onto
+              one bar so multiple markers stack at the same X position. */}
+          {['1d', '1w', '1M'].includes(timeframe) && risingAspects.length > 1 && (
+            <div style={{
+              fontSize: 10, lineHeight: 1.4, padding: '4px 6px',
+              background: theme === 'dark' ? '#3a2f1a' : '#fff8e1',
+              border: `1px solid ${theme === 'dark' ? '#7a5c15' : '#ffca28'}`,
+              borderRadius: 3,
+            }}>
+              ⚠︎ Chart timeframe is <b>{timeframe}</b>. Intraday aspects on the
+              same day will render on the same bar — switch to <b>1 h</b> or
+              lower to see individual crossings.
+            </div>
+          )}
+
+          {/* Rahu-Ketu identity note: the two nodes are always exactly 180°
+              apart, so every Rahu aspect to ASC coincides with a Ketu aspect
+              at (aspect+180)°. Scanning both with the same aspect set gives
+              duplicate markers on the exact same UTC millisecond. */}
+          {(risingPlanet === 'Rahu' || risingPlanet === 'Ketu') && risingAspects.length > 1 && (
+            <div style={{
+              fontSize: 10, lineHeight: 1.45, padding: '5px 7px',
+              background: theme === 'dark' ? '#1e2a3a' : '#e3f2fd',
+              border: `1px solid ${theme === 'dark' ? '#2b4d70' : '#64b5f6'}`,
+              borderRadius: 3,
+            }}>
+              <div style={{ fontWeight: 600, marginBottom: 2 }}>ℹ Rahu &amp; Ketu share the same clock</div>
+              Ketu is always <b>Rahu + 180°</b>. Every Rahu aspect to ASC is the
+              same instant as a Ketu aspect shifted by 180° (Rahu ☌ ≡ Ketu ☍,
+              Rahu 60° ≡ Ketu 240°, etc.). Scanning both nodes will put two
+              markers at every timestamp.
+              <div style={{ marginTop: 3, opacity: 0.85 }}>
+                <b>Tip:</b> scan one node with all aspects, or scan the second
+                node with only <b>0° Rising</b> (in a different colour) to mark
+                its rising moments as a highlight.
+              </div>
+            </div>
+          )}
         </div>
       )}
 

@@ -688,58 +688,82 @@ function moonSignals(slots: CandleSlot[], config: IndicatorConfig): IndicatorSer
 
   if (slots.length === 0) return { config, points: [], signalMarkers: markers };
 
-  // Convert date arrays into Sets for O(1) lookup by date string
-  const buySet = new Set(MOON_BUY_DATES.map(ts => dateKey(ts)));
-  const sellSet = new Set(MOON_SELL_DATES.map(ts => dateKey(ts)));
+  // Build an ordered array of trading slots (weekend/holiday placeholders
+  // have status !== 'trading'/'halfday' AND no candle). For a gapped
+  // market (US equity), a moon date on Sat/Sun/holiday must roll forward
+  // to the next slot that actually carries a candle. For a continuous
+  // market (crypto), every slot has a candle so the rollover is a no-op.
+  const tradingSlots = slots.filter(s => s.candle !== null);
+  if (tradingSlots.length === 0) return { config, points: [], signalMarkers: markers };
 
-  // Track which signal dates have already been marked (first candle only)
-  const buyUsed = new Set<string>();
-  const sellUsed = new Set<string>();
+  // Track which signal dates have already been marked (dedupe by target slot)
+  const buyUsed = new Set<number>();
+  const sellUsed = new Set<number>();
 
-  // Last known price for future projections
-  let lastPrice = 0;
-  for (let i = slots.length - 1; i >= 0; i--) {
-    if (slots[i].candle) { lastPrice = slots[i].candle!.close; break; }
+  const firstTradingTs = tradingSlots[0].timestamp;
+  const lastTradingTs = tradingSlots[tradingSlots.length - 1].timestamp;
+  let lastPrice = tradingSlots[tradingSlots.length - 1].candle!.close;
+
+  // For each moon date, find the first trading slot whose calendar day is
+  // ≥ the moon date (roll-forward semantics). Binary search over
+  // tradingSlots since both arrays are sorted ascending.
+  function findRollForwardSlot(ts: number): CandleSlot | null {
+    if (ts < firstTradingTs) return null;
+    if (ts > lastTradingTs) return null;
+    // Compare by UTC day so a moon date at 00:00 UTC matches a same-day
+    // slot stamped at session-open UTC (13:30 UTC for NYSE).
+    const target = utcDayNumber(ts);
+    let lo = 0;
+    let hi = tradingSlots.length - 1;
+    let best: CandleSlot | null = null;
+    while (lo <= hi) {
+      const mid = (lo + hi) >> 1;
+      const midDay = utcDayNumber(tradingSlots[mid].timestamp);
+      if (midDay >= target) {
+        best = tradingSlots[mid];
+        hi = mid - 1;
+      } else {
+        lo = mid + 1;
+      }
+    }
+    return best;
   }
 
-  // Average slot interval for future projection
+  for (const ts of MOON_BUY_DATES) {
+    const slot = findRollForwardSlot(ts);
+    if (!slot || !slot.candle || buyUsed.has(slot.slotIndex)) continue;
+    buyUsed.add(slot.slotIndex);
+    lastPrice = slot.candle.close;
+    markers.push({
+      slotIndex: slot.slotIndex,
+      timestamp: slot.timestamp,
+      price: slot.candle.low,
+      type: 'buy',
+    });
+  }
+
+  for (const ts of MOON_SELL_DATES) {
+    const slot = findRollForwardSlot(ts);
+    if (!slot || !slot.candle || sellUsed.has(slot.slotIndex)) continue;
+    sellUsed.add(slot.slotIndex);
+    markers.push({
+      slotIndex: slot.slotIndex,
+      timestamp: slot.timestamp,
+      price: slot.candle.high,
+      type: 'sell',
+    });
+  }
+
+  // Project future dates (beyond the last loaded bar) at an extrapolated
+  // slot index derived from the average interval between loaded slots.
   const avgInterval = slots.length > 1
     ? (slots[slots.length - 1].timestamp - slots[0].timestamp) / (slots.length - 1)
     : 86400000;
   const lastSlotTs = slots[slots.length - 1].timestamp;
   const lastSlotIdx = slots[slots.length - 1].slotIndex;
 
-  // Mark existing candle data
-  for (const slot of slots) {
-    if (!slot.candle) continue;
-    lastPrice = slot.candle.close;
-    const key = dateKey(slot.timestamp);
-
-    if (buySet.has(key) && !buyUsed.has(key)) {
-      buyUsed.add(key);
-      markers.push({
-        slotIndex: slot.slotIndex,
-        timestamp: slot.timestamp,
-        price: slot.candle.low,
-        type: 'buy',
-      });
-    }
-    if (sellSet.has(key) && !sellUsed.has(key)) {
-      sellUsed.add(key);
-      markers.push({
-        slotIndex: slot.slotIndex,
-        timestamp: slot.timestamp,
-        price: slot.candle.high,
-        type: 'sell',
-      });
-    }
-  }
-
-  // Project future dates that don't have candle data yet
-  const allFutureBuys = MOON_BUY_DATES.filter(ts => ts > lastSlotTs && !buyUsed.has(dateKey(ts)));
-  const allFutureSells = MOON_SELL_DATES.filter(ts => ts > lastSlotTs && !sellUsed.has(dateKey(ts)));
-
-  for (const ts of allFutureBuys) {
+  for (const ts of MOON_BUY_DATES) {
+    if (ts <= lastTradingTs) continue;
     const futureSlotIdx = lastSlotIdx + Math.round((ts - lastSlotTs) / avgInterval);
     markers.push({
       slotIndex: futureSlotIdx,
@@ -749,7 +773,8 @@ function moonSignals(slots: CandleSlot[], config: IndicatorConfig): IndicatorSer
     });
   }
 
-  for (const ts of allFutureSells) {
+  for (const ts of MOON_SELL_DATES) {
+    if (ts <= lastTradingTs) continue;
     const futureSlotIdx = lastSlotIdx + Math.round((ts - lastSlotTs) / avgInterval);
     markers.push({
       slotIndex: futureSlotIdx,
@@ -760,6 +785,11 @@ function moonSignals(slots: CandleSlot[], config: IndicatorConfig): IndicatorSer
   }
 
   return { config, points: [], signalMarkers: markers };
+}
+
+/** UTC day number since epoch — for calendar-day comparisons. */
+function utcDayNumber(ts: number): number {
+  return Math.floor(ts / 86_400_000);
 }
 
 /** Convert a UTC timestamp to a YYYY-MM-DD key for date comparison */
@@ -1056,106 +1086,111 @@ function highLowLevels(slots: CandleSlot[], config: IndicatorConfig): IndicatorS
     period: 'daily' | 'weekly' | 'monthly' | 'session',
     color: string,
     label?: string,
+    shifted = false,
   ) {
-    levels.push({ startSlotIndex: startIdx, endSlotIndex: endIdx, price: high, type: 'high', period, color, label: label ? `${label} H` : undefined });
-    levels.push({ startSlotIndex: startIdx, endSlotIndex: endIdx, price: low, type: 'low', period, color, label: label ? `${label} L` : undefined });
+    // Levels shifted forward represent the *previous* period's H/L, so the
+    // caller passes the compact "PDH/PDL/PWH/…" tags directly; sessions use
+    // the descriptive "Tokyo H / Tokyo L" style.
+    const hLabel = label ? (shifted ? `${label}H` : `${label} H`) : undefined;
+    const lLabel = label ? (shifted ? `${label}L` : `${label} L`) : undefined;
+    levels.push({ startSlotIndex: startIdx, endSlotIndex: endIdx, price: high, type: 'high', period, color, label: hLabel });
+    levels.push({ startSlotIndex: startIdx, endSlotIndex: endIdx, price: low, type: 'low', period, color, label: lLabel });
+  }
+
+  // ─── Bucketed period aggregation (daily / weekly / monthly) ────────────
+  //
+  // For D/W/M levels we plot each period's H/L over the *next* period's
+  // slot range: yesterday's H/L is drawn on today's bar range, last week's
+  // H/L on this week's range, etc. Sessions keep the on-same-day semantics.
+  interface PeriodBucket {
+    startIdx: number;
+    endIdx: number;
+    high: number;
+    low: number;
+  }
+
+  function bucketize(keyFn: (slot: CandleSlot) => string): PeriodBucket[] {
+    const buckets: PeriodBucket[] = [];
+    let curKey = '';
+    let cur: PeriodBucket | null = null;
+    for (const slot of slots) {
+      if (!slot.candle) continue;
+      const key = keyFn(slot);
+      if (key !== curKey) {
+        if (cur) buckets.push(cur);
+        curKey = key;
+        cur = {
+          startIdx: slot.slotIndex,
+          endIdx: slot.slotIndex,
+          high: slot.candle.high,
+          low: slot.candle.low,
+        };
+      } else if (cur) {
+        cur.endIdx = slot.slotIndex;
+        if (slot.candle.high > cur.high) cur.high = slot.candle.high;
+        if (slot.candle.low < cur.low) cur.low = slot.candle.low;
+      }
+    }
+    if (cur) buckets.push(cur);
+    return buckets;
+  }
+
+  function emitShiftedForward(
+    buckets: PeriodBucket[],
+    period: 'daily' | 'weekly' | 'monthly',
+    color: string,
+    label: string,
+  ) {
+    if (buckets.length === 0) return;
+    const lastSlotIdx = slots[slots.length - 1].slotIndex;
+    // Median bucket width, so the projected trailing range for the current
+    // (still-forming) period looks natural regardless of TF.
+    const widths = buckets
+      .map(b => b.endIdx - b.startIdx + 1)
+      .sort((a, b) => a - b);
+    const projectedWidth = Math.max(1, widths[Math.floor(widths.length / 2)]);
+
+    for (let i = 0; i < buckets.length; i++) {
+      const src = buckets[i];
+      const nextStart = i + 1 < buckets.length ? buckets[i + 1].startIdx : lastSlotIdx + 1;
+      const nextEnd   = i + 1 < buckets.length ? buckets[i + 1].endIdx   : nextStart + projectedWidth - 1;
+      flushPeriod(nextStart, nextEnd, src.high, src.low, period, color, label, true);
+    }
   }
 
   // ── DAILY HIGH/LOW ─────────────────────────────────────────────────────
   if (showDaily) {
-    let dayKey = '';
-    let dayStart = 0;
-    let dayEnd = 0;
-    let dayHigh = -Infinity;
-    let dayLow = Infinity;
-
-    for (const slot of slots) {
-      if (!slot.candle) continue;
+    const dailyBuckets = bucketize(slot => {
       const d = new Date(slot.timestamp);
-      const key = `${d.getUTCFullYear()}-${d.getUTCMonth()}-${d.getUTCDate()}`;
-      if (key !== dayKey) {
-        if (dayKey && dayHigh !== -Infinity) {
-          flushPeriod(dayStart, dayEnd, dayHigh, dayLow, 'daily', dailyColor, 'D');
-        }
-        dayKey = key;
-        dayStart = slot.slotIndex;
-        dayHigh = slot.candle.high;
-        dayLow = slot.candle.low;
-      }
-      dayEnd = slot.slotIndex;
-      if (slot.candle.high > dayHigh) dayHigh = slot.candle.high;
-      if (slot.candle.low < dayLow) dayLow = slot.candle.low;
-    }
-    if (dayKey && dayHigh !== -Infinity) {
-      flushPeriod(dayStart, dayEnd, dayHigh, dayLow, 'daily', dailyColor, 'D');
-    }
+      return `${d.getUTCFullYear()}-${d.getUTCMonth()}-${d.getUTCDate()}`;
+    });
+    emitShiftedForward(dailyBuckets, 'daily', dailyColor, 'PD');
   }
 
-  // ── WEEKLY HIGH/LOW (Mon 00:00 UTC – Sun 23:59:59 UTC) ────────────────
+  // ── WEEKLY HIGH/LOW (Monday-based UTC week) ────────────────────────────
   if (showWeekly) {
-    let weekKey = '';
-    let weekStart = 0;
-    let weekEnd = 0;
-    let weekHigh = -Infinity;
-    let weekLow = Infinity;
-
-    for (const slot of slots) {
-      if (!slot.candle) continue;
+    const weeklyBuckets = bucketize(slot => {
       const d = new Date(slot.timestamp);
-      // Compute Monday-based week: shift so Monday=0, compute week start timestamp
-      const dow = d.getUTCDay(); // 0=Sun,1=Mon,...,6=Sat
-      const mondayOffset = dow === 0 ? 6 : dow - 1; // days since Monday
+      const dow = d.getUTCDay(); // 0=Sun..6=Sat
+      const mondayOffset = dow === 0 ? 6 : dow - 1;
       const mondayTs = Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate() - mondayOffset);
-      const key = `${mondayTs}`;
-      if (key !== weekKey) {
-        if (weekKey && weekHigh !== -Infinity) {
-          flushPeriod(weekStart, weekEnd, weekHigh, weekLow, 'weekly', weeklyColor, 'W');
-        }
-        weekKey = key;
-        weekStart = slot.slotIndex;
-        weekHigh = slot.candle.high;
-        weekLow = slot.candle.low;
-      }
-      weekEnd = slot.slotIndex;
-      if (slot.candle.high > weekHigh) weekHigh = slot.candle.high;
-      if (slot.candle.low < weekLow) weekLow = slot.candle.low;
-    }
-    if (weekKey && weekHigh !== -Infinity) {
-      flushPeriod(weekStart, weekEnd, weekHigh, weekLow, 'weekly', weeklyColor, 'W');
-    }
+      return `${mondayTs}`;
+    });
+    emitShiftedForward(weeklyBuckets, 'weekly', weeklyColor, 'PW');
   }
 
   // ── MONTHLY HIGH/LOW ───────────────────────────────────────────────────
   if (showMonthly) {
-    let monthKey = '';
-    let monthStart = 0;
-    let monthEnd = 0;
-    let monthHigh = -Infinity;
-    let monthLow = Infinity;
-
-    for (const slot of slots) {
-      if (!slot.candle) continue;
+    const monthlyBuckets = bucketize(slot => {
       const d = new Date(slot.timestamp);
-      const key = `${d.getUTCFullYear()}-${d.getUTCMonth()}`;
-      if (key !== monthKey) {
-        if (monthKey && monthHigh !== -Infinity) {
-          flushPeriod(monthStart, monthEnd, monthHigh, monthLow, 'monthly', monthlyColor, 'M');
-        }
-        monthKey = key;
-        monthStart = slot.slotIndex;
-        monthHigh = slot.candle.high;
-        monthLow = slot.candle.low;
-      }
-      monthEnd = slot.slotIndex;
-      if (slot.candle.high > monthHigh) monthHigh = slot.candle.high;
-      if (slot.candle.low < monthLow) monthLow = slot.candle.low;
-    }
-    if (monthKey && monthHigh !== -Infinity) {
-      flushPeriod(monthStart, monthEnd, monthHigh, monthLow, 'monthly', monthlyColor, 'M');
-    }
+      return `${d.getUTCFullYear()}-${d.getUTCMonth()}`;
+    });
+    emitShiftedForward(monthlyBuckets, 'monthly', monthlyColor, 'PM');
   }
 
   // ── SESSION HIGH/LOW (Tokyo, London, New York, Sydney) ─────────────────
+  // Sessions render on their own day (no forward shift) — traders read them
+  // as "what happened during this session", not "carried forward level".
   if (showSession) {
     const SESSION_DEFS = [
       { name: 'Tokyo',    startHour: 0,  endHour: 9 },

@@ -83,10 +83,25 @@ EPHE_PATHS = [
     '/usr/share/swisseph/ephe',
 ]
 
+_resolved_ephe_path = None
 for path in EPHE_PATHS:
     if os.path.isdir(path):
         swe.set_ephe_path(path)
+        _resolved_ephe_path = path
         break
+
+# Startup banner — makes it obvious whether we're using .se1 files
+# (FLG_SWIEPH, ~0.001″ precision) or Moshier's built-in analytical
+# fallback (~2″), which happens silently when no path is set.
+_swe_version = getattr(swe, 'version', 'unknown')
+if _resolved_ephe_path:
+    print(f"[swisseph] library : pyswisseph {_swe_version}")
+    print(f"[swisseph] ephe dir: {_resolved_ephe_path}")
+    print(f"[swisseph] mode    : Swiss Ephemeris (.se1 files)")
+else:
+    print(f"[swisseph] library : pyswisseph {_swe_version}")
+    print(f"[swisseph] ephe dir: (none of {EPHE_PATHS} exist)")
+    print(f"[swisseph] mode    : Moshier fallback — accuracy ~2 arcsec")
 
 # Planet name → Swiss Ephemeris constant
 PLANETS = {
@@ -247,16 +262,44 @@ def find_aspect_dates():
 
 @app.route('/api/ephemeris/rising', methods=['POST'])
 def find_rising_dates():
-    """Find dates when Rahu/Ketu is on the Ascendant."""
+    """Find intraday times when a planet forms selected aspects to the Ascendant.
+
+    Body params:
+      start_date, end_date  – ISO date strings (UTC)
+      planet                – 'Sun' | 'Moon' | 'Mercury' | … | 'Rahu' | 'Ketu'
+                              (falls back to 'node' for backward compat)
+      node                  – legacy: 'Rahu' | 'Ketu'  (used only when
+                              `planet` is absent)
+      aspects               – list of target angles in degrees between the
+                              Ascendant and the planet. Defaults to
+                              conjunction only ([0]). Standard set is
+                              [0, 60, 90, 120, 180, 240, 270, 300].
+      orb                   – degrees of tolerance for a "hit"
+      location.lat/lon      – observer coordinates
+      ayanamsa              – sidereal ayanamsa name or 'Tropical'
+      step_minutes          – scan resolution. Auto-tightened to ≤
+                              orb / 15 × 60 min so no aspect window can
+                              be skipped when the Ascendant races past
+                              at ~15°/h.
+    """
     body = request.get_json(force=True)
 
     start = parse_date(body['start_date'])
     end = parse_date(body['end_date'])
-    node = body.get('node', 'Rahu')
+    # New generic name; falls back to legacy `node`
+    planet = body.get('planet') or body.get('node') or 'Rahu'
+    aspects_raw = body.get('aspects', [0])
+    aspects = sorted({int(round(float(a))) % 360 for a in aspects_raw})
     orb = float(body.get('orb', 1.0))
     location = body.get('location', {'lat': 28.6139, 'lon': 77.2090})
     ayanamsa = body.get('ayanamsa', 'Lahiri')
-    step_minutes = int(body.get('step_minutes', 10))
+    requested_step = int(body.get('step_minutes', 10))
+    # Ascendant travels ~15°/h, so any orb window narrower than requested_step
+    # minutes worth of Ascendant motion can be skipped. Cap step at half the
+    # orb-window width (in minutes) so at least two samples land inside every
+    # crossing.
+    orb_window_minutes = max(0.5, (orb / 15.0) * 60.0)
+    step_minutes = max(1, min(requested_step, int(orb_window_minutes // 2) or 1))
 
     lat = float(location['lat'])
     lon = float(location['lon'])
@@ -269,16 +312,37 @@ def find_rising_dates():
         ay_id = AYANAMSAS.get(ayanamsa, swe.SIDM_LAHIRI)
         swe.set_sid_mode(ay_id, 0, 0)
 
+    ASPECT_NAMES = {
+        0: 'Conjunction', 30: 'Semi-sextile', 45: 'Semi-square',
+        60: 'Sextile', 90: 'Square', 120: 'Trine', 135: 'Sesquisquare',
+        150: 'Quincunx', 180: 'Opposition',
+        210: 'Quincunx (R)', 225: 'Sesquisquare (R)', 240: 'Trine (R)',
+        270: 'Square (R)', 300: 'Sextile (R)', 315: 'Semi-square (R)',
+        330: 'Semi-sextile (R)',
+    }
+
+    # Resolve which planet ID to compute — Ketu is derived from Rahu.
+    if planet == 'Ketu':
+        planet_id = swe.MEAN_NODE
+        derive_opposite = True
+    elif planet in PLANETS:
+        planet_id = PLANETS[planet]
+        derive_opposite = False
+    else:
+        return jsonify({'error': f"Unknown planet '{planet}'"}), 400
+
     results = []
+    # Independent orb-state per aspect target so multiple aspects can be
+    # in flight in overlapping scan windows without cross-triggering.
+    in_orb = dict.fromkeys(aspects, False)
     current = start
     step = timedelta(minutes=step_minutes)
-    in_orb = False
 
     while current <= end:
         jd = datetime_to_jd(current)
 
         # Ascendant
-        cusps, ascmc = swe.houses(jd, lat, lon, b'P')
+        _cusps, ascmc = swe.houses(jd, lat, lon, b'P')
         asc_tropical = ascmc[0]
         if sidereal:
             ayan_val = swe.get_ayanamsa_ut(jd)
@@ -286,31 +350,51 @@ def find_rising_dates():
         else:
             asc = asc_tropical
 
-        # Node position
-        rahu_pos = calc_position(jd, swe.MEAN_NODE, sidereal)
-        if node == 'Ketu':
-            node_pos = (rahu_pos + 180) % 360
-        else:
-            node_pos = rahu_pos
+        # Planet position
+        planet_pos = calc_position(jd, planet_id, sidereal)
+        if derive_opposite:
+            planet_pos = (planet_pos + 180) % 360
 
-        diff = angular_diff(asc, node_pos)
-        within = diff <= orb
+        # Signed directional angle (ASC − planet) in [0,360). Reflex angles
+        # are distinguishable because Ascendant rotates monotonically.
+        delta = (asc - planet_pos) % 360
 
-        if within and not in_orb:
-            results.append({
-                'timestamp': int(current.timestamp() * 1000),
-                'date': current.strftime('%Y-%m-%d %H:%M UTC'),
-                'label': f"{node} Rising",
-                'asc_deg': round(asc, 4),
-                'node_deg': round(node_pos, 4),
-            })
-            in_orb = True
-        elif not within:
-            in_orb = False
+        for a in aspects:
+            d = (delta - a) % 360
+            gap = min(d, 360 - d)
+            within = gap <= orb
+            if within and not in_orb[a]:
+                aspect_name = ASPECT_NAMES.get(a, f'{a}°')
+                if a == 0:
+                    label = f"{planet} Rising"
+                else:
+                    label = f"{planet} {aspect_name} ASC"
+                results.append({
+                    'timestamp': int(current.timestamp() * 1000),
+                    'date': current.strftime('%Y-%m-%d %H:%M UTC'),
+                    'label': label,
+                    'planet': planet,
+                    'aspect_deg': a,
+                    'asc_deg': round(asc, 4),
+                    'planet_deg': round(planet_pos, 4),
+                    'delta_deg': round(delta, 4),
+                })
+                in_orb[a] = True
+            elif not within:
+                in_orb[a] = False
 
         current += step
 
-    return jsonify({'dates': results})
+    return jsonify({
+        'dates': results,
+        'meta': {
+            'planet': planet,
+            'aspects': aspects,
+            'requested_step_minutes': requested_step,
+            'effective_step_minutes': step_minutes,
+            'orb': orb,
+        },
+    })
 
 
 @app.route('/api/ephemeris/retrograde', methods=['POST'])

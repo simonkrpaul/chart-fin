@@ -94,7 +94,28 @@ export function generateSlots(
   return generateIntradaySlots(startMs, endMs, timeframe, session);
 }
 
-/** Intraday slot generation (5m / 10m / 15m / 1h / 4h) – original logic. */
+/**
+ * Intraday slot generation (1m / 5m / 15m / 1h / 4h …).
+ *
+ * For continuous markets (crypto, session.tradingDays covers all 7 days
+ * with a full 00:00–23:59 session) every slot is 'trading' and there are
+ * no gaps to worry about.
+ *
+ * For non-continuous markets (equities, futures) we intentionally fill
+ * the whole 24 h of every calendar day at the TF cadence so that
+ *   • the intraday x-axis is uniform across days,
+ *   • the overnight window between session close and next open renders
+ *     as underscore-glyph placeholder columns (status 'outside_session'),
+ *   • cross-market offset overlays (e.g. BTC on AAPL 5m) can map to
+ *     every slot instead of only during 09:30–16:00 NY,
+ *   • the `_applyGapVisibility` "hide gaps" toggle can collapse all
+ *     empty columns for a compact session-only view.
+ *
+ * Memory note: full-fill multiplies slot count by 24 h / session_hours
+ * (≈ 3.7× for NYSE 5m). At 8 years of 5m data this is ~840K slots ≈
+ * 80 MB — still tractable in the browser. Loads capped at 2000 bars use
+ * ~10K slots so the default user experience is unaffected.
+ */
 function generateIntradaySlots(
   startMs: number,
   endMs: number,
@@ -102,10 +123,13 @@ function generateIntradaySlots(
   session: SessionConfig,
 ): CandleSlot[] {
   const tfMinutes = TIMEFRAME_MINUTES[timeframe];
+  const tfMs = tfMinutes * 60_000;
   const tz = session.timezone;
   const slots: CandleSlot[] = [];
   let slotIndex = 0;
   const holidaySet = new Set(session.holidays);
+  const [openH, openM] = parseTime(session.regularOpen);
+  const [closeH, closeM] = parseTime(session.regularClose);
 
   const startLocal = toZonedTime(new Date(startMs), tz);
   const endLocal = toZonedTime(new Date(endMs), tz);
@@ -118,18 +142,26 @@ function generateIntradaySlots(
     const isTrading = session.tradingDays.includes(isoWeekday);
     const isHoliday = holidaySet.has(localDateStr);
 
-    if (!isTrading) {
-      const midnightUtc = fromZonedTime(`${localDateStr}T00:00:00`, tz).getTime();
-      slots.push({ slotIndex: slotIndex++, timestamp: midnightUtc, status: 'weekend', candle: null });
-      continue;
-    }
-    if (isHoliday) {
-      const midnightUtc = fromZonedTime(`${localDateStr}T00:00:00`, tz).getTime();
-      slots.push({ slotIndex: slotIndex++, timestamp: midnightUtc, status: 'holiday', candle: null });
-      continue;
-    }
-    const { timestamps, status } = slotsForDay(localDateStr, session, tfMinutes);
-    for (const ts of timestamps) {
+    const midnightUtc = fromZonedTime(`${localDateStr}T00:00:00`, tz).getTime();
+    const nextMidnightUtc = midnightUtc + 24 * 60 * 60 * 1000;
+
+    // Session boundaries (UTC ms) for this local day — used to decide
+    // 'trading' vs 'outside_session' inside the 24 h fill loop.
+    const halfDay = session.halfDays[localDateStr];
+    const [sesCloseH, sesCloseM] = halfDay ? parseTime(halfDay.close) : [closeH, closeM];
+    const sessionOpenMs  = localToUtcMs(localDateStr, openH, openM, tz);
+    const sessionCloseMs = localToUtcMs(localDateStr, sesCloseH, sesCloseM, tz);
+    const sessionStatus: SlotStatus = halfDay ? 'halfday' : 'trading';
+
+    let dayBackdrop: SlotStatus | null = null;
+    if (!isTrading) dayBackdrop = 'weekend';
+    else if (isHoliday) dayBackdrop = 'holiday';
+
+    for (let ts = midnightUtc; ts < nextMidnightUtc; ts += tfMs) {
+      let status: SlotStatus;
+      if (dayBackdrop) status = dayBackdrop;
+      else if (ts >= sessionOpenMs && ts < sessionCloseMs) status = sessionStatus;
+      else status = 'outside_session';
       slots.push({ slotIndex: slotIndex++, timestamp: ts, status, candle: null });
     }
   }
@@ -137,119 +169,142 @@ function generateIntradaySlots(
 }
 
 /** Daily slots – one slot per calendar day; trading days get status 'trading'. */
+// ── Daily / Weekly / Monthly slot generators ─────────────────────────────
+//
+// For D/W/M timeframes we operate purely in UTC calendar space:
+//   • All raw daily bars from every supported provider (Kaggle, Bybit,
+//     Alpaca, Dukascopy, mock) are stamped at 00:00 UTC of their trading
+//     date. Iterating UTC calendar days makes the raw-candle → slot
+//     mapping a trivial 1-to-1 by `toISOString().slice(0,10)`.
+//   • Anchoring the slot timestamp at 12:00 UTC guarantees it lands on
+//     the intended calendar date in any display tz between UTC−11 and
+//     UTC+12 (i.e. every IANA zone this app supports). The session tz is
+//     therefore irrelevant for D/W/M rendering — it only informs which
+//     UTC weekdays are trading days and which UTC calendar dates are
+//     holidays.
+//   • Session tz still drives intraday slot generation (see
+//     generateIntradaySlots) because session open/close matters at
+//     minute/hour granularity.
+
+/** Midnight UTC of the UTC calendar day containing `ms`. */
+function utcDayFloor(ms: number): number {
+  return Math.floor(ms / 86_400_000) * 86_400_000;
+}
+
+/** "YYYY-MM-DD" of the UTC calendar day containing `ms`. */
+function utcDateKey(ms: number): string {
+  return new Date(ms).toISOString().slice(0, 10);
+}
+
+/** ISO weekday (1=Mon..7=Sun) of the UTC calendar day containing `ms`. */
+function utcIsoWeekday(ms: number): number {
+  return new Date(ms).getUTCDay() || 7;
+}
+
+/** Anchor the slot ts at 12:00 UTC of a given UTC day (safe across tzs). */
+const NOON_MS = 12 * 60 * 60 * 1000;
+
 function generateDailySlots(
   startMs: number,
   endMs: number,
   session: SessionConfig,
 ): CandleSlot[] {
-  const tz = session.timezone;
+  const holidaySet = new Set(session.holidays);
   const slots: CandleSlot[] = [];
   let slotIndex = 0;
-  const holidaySet = new Set(session.holidays);
-  const [openH, openM] = parseTime(session.regularOpen);
 
-  const startLocal = toZonedTime(new Date(startMs), tz);
-  const endLocal   = toZonedTime(new Date(endMs), tz);
-  const totalDays  = differenceInCalendarDays(startOfDay(endLocal), startOfDay(startLocal)) + 1;
+  const firstDay = utcDayFloor(startMs);
+  const lastDay  = utcDayFloor(endMs);
 
-  for (let d = 0; d < totalDays; d++) {
-    const dayDate      = addDays(startOfDay(startLocal), d);
-    const localDateStr = format(dayDate, 'yyyy-MM-dd');
-    const isoWeekday   = getDay(dayDate) || 7;
-    const isTrading    = session.tradingDays.includes(isoWeekday);
-    const isHoliday    = holidaySet.has(localDateStr);
+  for (let day = firstDay; day <= lastDay; day += 86_400_000) {
+    const ts        = day + NOON_MS;
+    const dateKey   = utcDateKey(day);
+    const weekday   = utcIsoWeekday(day);
+    const isTrading = session.tradingDays.includes(weekday);
+    const isHoliday = holidaySet.has(dateKey);
 
-    if (!isTrading) {
-      const ts = fromZonedTime(`${localDateStr}T00:00:00`, tz).getTime();
-      slots.push({ slotIndex: slotIndex++, timestamp: ts, status: 'weekend', candle: null });
-      continue;
-    }
-    if (isHoliday) {
-      const ts = fromZonedTime(`${localDateStr}T00:00:00`, tz).getTime();
-      slots.push({ slotIndex: slotIndex++, timestamp: ts, status: 'holiday', candle: null });
-      continue;
-    }
-    const halfDay = session.halfDays[localDateStr];
-    const status: SlotStatus = halfDay ? 'halfday' : 'trading';
-    const ts = localToUtcMs(localDateStr, openH, openM, tz);
+    let status: SlotStatus;
+    if (!isTrading) status = 'weekend';
+    else if (isHoliday) status = 'holiday';
+    else if (session.halfDays[dateKey]) status = 'halfday';
+    else status = 'trading';
+
     slots.push({ slotIndex: slotIndex++, timestamp: ts, status, candle: null });
   }
   return slots;
 }
 
-/** Weekly slots – one slot per calendar week (Mon-based). */
+/** Weekly slots – one slot per ISO week (Mon-based, UTC). */
 function generateWeeklySlots(
   startMs: number,
   endMs: number,
   session: SessionConfig,
 ): CandleSlot[] {
-  const tz = session.timezone;
+  const holidaySet = new Set(session.holidays);
   const slots: CandleSlot[] = [];
   let slotIndex = 0;
-  const holidaySet = new Set(session.holidays);
-  const [openH, openM] = parseTime(session.regularOpen);
 
-  // Snap to Monday of the start week
-  const startLocal = toZonedTime(new Date(startMs), tz);
-  const endLocal   = toZonedTime(new Date(endMs), tz);
-  let weekStart    = startOfWeek(startOfDay(startLocal), { weekStartsOn: 1 }); // Mon
-  const weekEnd    = startOfWeek(startOfDay(endLocal),   { weekStartsOn: 1 });
+  // Snap start to the Monday of its UTC week.
+  const startDay = utcDayFloor(startMs);
+  const shiftToMon = ((utcIsoWeekday(startDay) - 1) * 86_400_000);
+  let weekStart = startDay - shiftToMon;
+  const endDay = utcDayFloor(endMs);
 
-  while (weekStart <= weekEnd) {
-    // Find first trading day in this Mon–Fri week
-    let tradingTs: number | null = null;
+  while (weekStart <= endDay) {
+    // Find the first UTC trading day of the week that isn't a holiday.
+    let tradingDay: number | null = null;
     for (let off = 0; off < 5; off++) {
-      const day        = addDays(weekStart, off);
-      const dateStr    = format(day, 'yyyy-MM-dd');
-      const isoWeekday = getDay(day) || 7;
-      if (session.tradingDays.includes(isoWeekday) && !holidaySet.has(dateStr)) {
-        tradingTs = localToUtcMs(dateStr, openH, openM, tz);
+      const day     = weekStart + off * 86_400_000;
+      const weekday = utcIsoWeekday(day);
+      if (session.tradingDays.includes(weekday) && !holidaySet.has(utcDateKey(day))) {
+        tradingDay = day;
         break;
       }
     }
-    const mondayStr = format(weekStart, 'yyyy-MM-dd');
-    const ts = tradingTs ?? fromZonedTime(`${mondayStr}T00:00:00`, tz).getTime();
-    const status: SlotStatus = tradingTs ? 'trading' : 'holiday';
+    const ts = (tradingDay ?? weekStart) + NOON_MS;
+    const status: SlotStatus = tradingDay !== null ? 'trading' : 'holiday';
     slots.push({ slotIndex: slotIndex++, timestamp: ts, status, candle: null });
-    weekStart = addWeeks(weekStart, 1);
+    weekStart += 7 * 86_400_000;
   }
   return slots;
 }
 
-/** Monthly slots – one slot per calendar month. */
+/** Monthly slots – one slot per UTC calendar month. */
 function generateMonthlySlots(
   startMs: number,
   endMs: number,
   session: SessionConfig,
 ): CandleSlot[] {
-  const tz = session.timezone;
+  const holidaySet = new Set(session.holidays);
   const slots: CandleSlot[] = [];
   let slotIndex = 0;
-  const holidaySet = new Set(session.holidays);
-  const [openH, openM] = parseTime(session.regularOpen);
 
-  const startLocal = toZonedTime(new Date(startMs), tz);
-  const endLocal   = toZonedTime(new Date(endMs), tz);
-  let monthStart   = startOfMonth(startOfDay(startLocal));
-  const monthEnd   = startOfMonth(startOfDay(endLocal));
+  const start = new Date(utcDayFloor(startMs));
+  const end   = new Date(utcDayFloor(endMs));
+  let y = start.getUTCFullYear();
+  let m = start.getUTCMonth();
+  const endY = end.getUTCFullYear();
+  const endM = end.getUTCMonth();
 
-  while (monthStart <= monthEnd) {
-    const daysInMonth = differenceInCalendarDays(endOfMonth(monthStart), monthStart) + 1;
-    let tradingTs: number | null = null;
+  while (y < endY || (y === endY && m <= endM)) {
+    const firstOfMonth = Date.UTC(y, m, 1);
+    const daysInMonth  = new Date(Date.UTC(y, m + 1, 0)).getUTCDate();
+
+    let tradingDay: number | null = null;
     for (let off = 0; off < daysInMonth; off++) {
-      const day        = addDays(monthStart, off);
-      const dateStr    = format(day, 'yyyy-MM-dd');
-      const isoWeekday = getDay(day) || 7;
-      if (session.tradingDays.includes(isoWeekday) && !holidaySet.has(dateStr)) {
-        tradingTs = localToUtcMs(dateStr, openH, openM, tz);
+      const day     = firstOfMonth + off * 86_400_000;
+      const weekday = utcIsoWeekday(day);
+      if (session.tradingDays.includes(weekday) && !holidaySet.has(utcDateKey(day))) {
+        tradingDay = day;
         break;
       }
     }
-    const monthStr = format(monthStart, 'yyyy-MM-dd');
-    const ts = tradingTs ?? fromZonedTime(`${monthStr}T00:00:00`, tz).getTime();
-    const status: SlotStatus = tradingTs ? 'trading' : 'holiday';
+    const ts = (tradingDay ?? firstOfMonth) + NOON_MS;
+    const status: SlotStatus = tradingDay !== null ? 'trading' : 'holiday';
     slots.push({ slotIndex: slotIndex++, timestamp: ts, status, candle: null });
-    monthStart = addMonths(monthStart, 1);
+
+    m += 1;
+    if (m === 12) { m = 0; y += 1; }
   }
   return slots;
 }

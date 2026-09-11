@@ -62,9 +62,13 @@ import argparse
 import csv
 import json
 import pathlib
-import resource
 import sys
 import time
+
+try:
+    import resource  # POSIX only; unavailable on Windows
+except ImportError:  # pragma: no cover - Windows
+    resource = None  # type: ignore[assignment]
 from datetime import datetime, timezone
 from typing import IO
 
@@ -81,7 +85,10 @@ def _raise_fd_limit(target: int = 4096) -> None:
     """
     macOS defaults to 256 open files per process; we open ~500 for S&P 500.
     Raise the soft limit — no sudo needed up to the hard limit.
+    No-op on Windows (no `resource` module; default fd limit is already high).
     """
+    if resource is None:
+        return
     try:
         soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
         want = min(target, hard) if hard != resource.RLIM_INFINITY else target
