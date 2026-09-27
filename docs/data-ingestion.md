@@ -101,6 +101,68 @@ timestamp,open,high,low,close,volume
 The sidecar `<SYMBOL>.meta.json` is optional and adds `exchange`, `description`,
 `sector`, `industry` fields to the Chart Picker's display.
 
+## Troubleshooting: "No candles in DB" and friends
+
+The Chart Picker's status bar shows one of a few actionable messages when it
+can't open a series. Each one tells you exactly what to do next.
+
+### `No candles in DB for <market>/<symbol> @ <tf>. Symbol not in IndexedDB. …`
+
+**Cause:** the CSV exists on disk but the browser hasn't ingested it yet.
+
+**Fix (in order):**
+
+1. **Refresh the page** (⌘R). The Chart Picker re-reads `manifest.json` on open.
+2. Open the picker → **↻ Rescan disk**. If the symbol is listed as **"pending"**, that's normal — clicking it fetches the CSV.
+3. Click the symbol. `ingestOne()` pulls the one CSV into IndexedDB.
+4. If the symbol still doesn't appear at all:
+   - Check `public/data/markets/manifest.json` — does the symbol have an entry?
+   - Check `public/data/markets/<market>/<SYMBOL>_<tf>.csv` exists on disk.
+   - If not, re-run the downloader script that owns that symbol (see the tables above).
+5. If the manifest and CSV both exist but the error persists, the local IndexedDB may be stale. Wipe it and reload:
+   ```
+   DevTools → Application → IndexedDB → chart-fin-db → Delete database → ⌘R
+   ```
+   The next open of the picker will re-ingest fresh from the CSVs on disk.
+
+### `No candles in DB for <market>/<symbol> @ <tf> (finest stored: <tf2>). Cannot resample UP from <tf2> to a finer timeframe. …`
+
+**Cause:** you're asking for a finer TF than what was downloaded. E.g. picking `1m` for a symbol whose finest stored TF is `1d`. The resample engine can only aggregate (1m → 5m → 1h → 1d), not subdivide.
+
+**Fix:**
+
+- Pick the finest stored TF **or coarser**.
+- Or re-run the downloader script with the finer TF:
+  ```bash
+  # e.g. add 1-minute AAPL bars
+  python scripts/download_alpaca.py --symbols AAPL --timeframe 1m --years 2 --resume
+  ```
+
+### The picker shows the symbol but clicking it hangs at "Loading…"
+
+- Open the browser console. Look for `[openSeries]` log lines with timing.
+- If `[openSeries] loaded` shows `rows: 0` and no error, the DB probably has the row but the `availableTimeframes` list is stale. Wipe IndexedDB (as above) and refresh.
+- If the request stalls with no logs at all, check DevTools → Network for the `/data/markets/.../<SYMBOL>_<tf>.csv` request. A 404 means the manifest points at a file that doesn't exist — re-run the downloader.
+
+### The chart opens but is empty (no candles visible)
+
+- Almost always a gap-visibility filter issue, not a "no candles" issue. Check the toolbar's **Session Only ↔ Show 24h** and the **🕒 session-hours badge**.
+  - If the badge shows a very narrow session (e.g. `15:30–15:55 New_York`), an earlier auto-detect likely mis-fired. Click the badge → **↺ Reset to market default**.
+  - If it shows `09:30–16:00 New_York` and you still see nothing, try toggling **Session Only → Show 24h** to reveal whether the bars are landing on non-session slots.
+
+### "Rescan disk" button doesn't pick up the new symbol
+
+`↻ Rescan disk` re-reads `public/data/markets/manifest.json`. If the symbol isn't there, the downloader didn't rebuild the manifest. Two things to try:
+
+1. Re-run the downloader — the manifest step runs at the end.
+2. Rebuild the manifest by hand for any script:
+   ```bash
+   python scripts/mock_alpaca.py --rebuild-manifest-only
+   # or
+   python scripts/import_market.py --rebuild-manifest-only
+   ```
+   Both scripts import the same `_manifest.py` helper and scan the whole `public/data/markets/` tree.
+
 ---
 
 ## 1. Alpaca — US equities (S&P 500)

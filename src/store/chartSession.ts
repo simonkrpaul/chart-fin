@@ -64,7 +64,19 @@ export async function openSeries(
       firstTs: candles[0]?.timestamp, lastTs: candles[candles.length - 1]?.timestamp,
       ms: (performance.now() - t0).toFixed(0),
     });
-    if (candles.length === 0) return { ok: false, rows: 0, message: 'No candles in DB' };
+    if (candles.length === 0) {
+      // Build a diagnostic message that tells the user exactly what to do.
+      const finestAvailable = sourceTimeframe && sourceTimeframe !== tf
+        ? ` (finest stored: ${sourceTimeframe})`
+        : '';
+      const hint = sourceTimeframe && sourceTimeframe !== tf
+        ? `Cannot resample UP from ${sourceTimeframe} to a finer timeframe. Pick ${sourceTimeframe} or coarser, or re-run the downloader for a finer TF.`
+        : `Symbol not in IndexedDB. Refresh browser (⌘R) → open Chart Picker → ↻ Rescan disk. If still missing, re-run the downloader script for this symbol.`;
+      return {
+        ok: false, rows: 0,
+        message: `No candles in DB for ${market}/${symbol} @ ${tf}${finestAvailable}. ${hint}`,
+      };
+    }
 
     const store = primaryChartStore.getState();
     const preset = presetFor(market);
