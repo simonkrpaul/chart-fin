@@ -562,7 +562,7 @@ export function createChartStore(panelId: string = 'p1'): StoreApi<ChartState & 
 
       // Drop extended-hours bars before resample so higher-TF buckets at the
       // session open don't blend pre-market data with the real opening bar.
-      const filteredBase = filterBySessionHours(base, s.session);
+      const filteredBase = filterBySessionHours(base, s.session, baseTf);
 
       let source: RawCandle[];
       if (canResample(baseTf, tf)) {
@@ -727,7 +727,7 @@ export function createChartStore(panelId: string = 'p1'): StoreApi<ChartState & 
       const base = s.baseCandles.length > 0 ? s.baseCandles : s.rawCandles;
       const baseTf = s.baseTimeframe ?? s.timeframe;
       if (base.length === 0) return;
-      const filteredBase = filterBySessionHours(base, s.session);
+      const filteredBase = filterBySessionHours(base, s.session, baseTf);
       let source: RawCandle[];
       if (canResample(baseTf, s.timeframe)) {
         source = resampleCandles(filteredBase, s.timeframe);

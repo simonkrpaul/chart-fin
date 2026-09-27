@@ -66,15 +66,18 @@ export async function openSeries(
     });
     if (candles.length === 0) {
       // Build a diagnostic message that tells the user exactly what to do.
+      // The load path is: IDB cache → CSV via manifest. If we got here,
+      // both were empty, so the CSV isn't on disk (or the manifest doesn't
+      // advertise the TF).
       const finestAvailable = sourceTimeframe && sourceTimeframe !== tf
-        ? ` (finest stored: ${sourceTimeframe})`
+        ? ` (finest advertised: ${sourceTimeframe})`
         : '';
       const hint = sourceTimeframe && sourceTimeframe !== tf
         ? `Cannot resample UP from ${sourceTimeframe} to a finer timeframe. Pick ${sourceTimeframe} or coarser, or re-run the downloader for a finer TF.`
-        : `Symbol not in IndexedDB. Refresh browser (⌘R) → open Chart Picker → ↻ Rescan disk. If still missing, re-run the downloader script for this symbol.`;
+        : `CSV missing on disk. Check public/data/markets/${market}/${symbol}_${tf}.csv exists, then click ↻ Rescan disk in the picker. If the file is missing, re-run the downloader script for this symbol.`;
       return {
         ok: false, rows: 0,
-        message: `No candles in DB for ${market}/${symbol} @ ${tf}${finestAvailable}. ${hint}`,
+        message: `No candles for ${market}/${symbol} @ ${tf}${finestAvailable}. ${hint}`,
       };
     }
 

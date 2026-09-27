@@ -49,6 +49,90 @@ export interface Manifest {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Manifest cache — in-memory, fetched once, refreshable on demand
+//
+// The manifest is the SOURCE OF TRUTH for what data exists. IndexedDB is
+// a pure cache layer: if it hits, great; if it misses, we fetch the CSV
+// straight off disk. This is why the picker and the load path both go
+// through _getManifestUrl() rather than trusting the IDB's availableTimeframes.
+// ─────────────────────────────────────────────────────────────────────────────
+
+let _manifestPromise: Promise<Manifest | null> | null = null;
+let _manifestByKey: Map<string, ManifestSource> | null = null;
+
+const seriesKey = (market: string, symbol: string, tf: Timeframe) =>
+  `${market}::${symbol}::${tf}`;
+
+async function _fetchManifest(url: string): Promise<Manifest | null> {
+  try {
+    const resp = await fetch(url, { cache: 'no-store' });
+    if (!resp.ok) {
+      // eslint-disable-next-line no-console
+      console.warn(`[manifest] fetch ${url} → HTTP ${resp.status}`);
+      return null;
+    }
+    const m = (await resp.json()) as Manifest;
+    // eslint-disable-next-line no-console
+    console.info(`[manifest] fetched ${m.sources?.length ?? 0} series (generatedAt=${m.generatedAt})`);
+    return m;
+  } catch (err) {
+    // eslint-disable-next-line no-console
+    console.error(`[manifest] fetch ${url} failed`, err);
+    return null;
+  }
+}
+
+/**
+ * Fetch (and cache) the manifest. Idempotent; concurrent callers share one
+ * in-flight fetch. Call `refreshManifest()` after a downloader script runs
+ * to invalidate.
+ */
+export async function getManifest(url: string = MANIFEST_URL_DEFAULT): Promise<Manifest | null> {
+  if (_manifestPromise) return _manifestPromise;
+  _manifestPromise = _fetchManifest(url).then(m => {
+    if (m) {
+      _manifestByKey = new Map(
+        m.sources.map(s => [seriesKey(s.market, s.symbol, s.timeframe), s]),
+      );
+    }
+    return m;
+  });
+  return _manifestPromise;
+}
+
+/** Force a fresh manifest fetch on next call. */
+export function refreshManifest(): void {
+  _manifestPromise = null;
+  _manifestByKey = null;
+}
+
+/** Manifest entry for (market, symbol, timeframe) or null if not advertised. */
+export async function getManifestSource(
+  market: string, symbol: string, tf: Timeframe,
+): Promise<ManifestSource | null> {
+  await getManifest();
+  return _manifestByKey?.get(seriesKey(market, symbol, tf)) ?? null;
+}
+
+/**
+ * All timeframes the manifest advertises for a symbol. Returns finest-first
+ * (1m before 5m before 1h etc.), so `[0]` is the ideal resample source.
+ */
+export async function getManifestTimeframes(
+  market: string, symbol: string,
+): Promise<{ timeframe: Timeframe; url: string; exchange?: string; description?: string }[]> {
+  const m = await getManifest();
+  if (!m) return [];
+  return m.sources
+    .filter(s => s.market === market && s.symbol === symbol)
+    .sort((a, b) => TIMEFRAME_MINUTES[a.timeframe] - TIMEFRAME_MINUTES[b.timeframe])
+    .map(s => ({
+      timeframe: s.timeframe, url: s.url,
+      exchange: s.exchange, description: s.description,
+    }));
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Bootstrap
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -228,11 +312,78 @@ function pickSourceTimeframe(
 }
 
 /**
- * Fast initial load – returns the most recent `count` bars for the series.
- * Falls back to resampling from the finest stored TF when the exact TF is
- * not in the DB (e.g. requested 1w but only 1d is stored).
+ * Fetch a single series' CSV straight off disk, parse, and return candles.
+ * Never touches IndexedDB. Used as the reliable fallback whenever the DB
+ * cache is empty or stale.
+ */
+async function _fetchCsvCandles(url: string): Promise<RawCandle[]> {
+  const resp = await fetch(url);
+  if (!resp.ok) throw new Error(`HTTP ${resp.status} fetching ${url}`);
+  const text = await resp.text();
+  const filename = url.split('/').pop() ?? 'data.csv';
+  const file = new File([text], filename, { type: 'text/csv' });
+  const { candles } = await parseOHLCVFile(file);
+  return candles;
+}
+
+/**
+ * Write freshly-parsed candles into IndexedDB in the background so the next
+ * open of this series can use the fast DB path. Errors are swallowed —
+ * writeback is best-effort and must never block the chart from opening.
+ */
+function _writebackCandles(
+  market: string, symbol: string, timeframe: Timeframe,
+  candles: RawCandle[], src: ManifestSource,
+): void {
+  if (candles.length === 0) return;
+  queueMicrotask(async () => {
+    try {
+      await store.upsertSymbol({
+        market, symbol,
+        exchange: src.exchange,
+        description: src.description,
+        baseTimeframe: timeframe,
+      });
+      await store.saveCandles(market, symbol, timeframe, candles);
+      invalidateSeries(market, symbol, timeframe);
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.warn(`[marketDb] writeback for ${market}/${symbol}@${timeframe} failed`, err);
+    }
+  });
+}
+
+/**
+ * Pick the best source timeframe from what's advertised in the manifest.
+ * Prefers the requested TF if available, else the finest coarser TF that
+ * can be resampled UP to it.
+ */
+async function _pickManifestSource(
+  market: string, symbol: string, requested: Timeframe,
+): Promise<{ tf: Timeframe; src: ManifestSource } | null> {
+  const tfs = await getManifestTimeframes(market, symbol);
+  if (tfs.length === 0) return null;
+  // Exact match wins.
+  const exact = tfs.find(t => t.timeframe === requested);
+  if (exact) return { tf: exact.timeframe, src: await getManifestSource(market, symbol, exact.timeframe) as ManifestSource };
+  // Otherwise the finest TF that can resample UP to `requested`.
+  const finest = tfs.find(t => canResample(t.timeframe, requested));
+  if (!finest) return null;
+  const src = await getManifestSource(market, symbol, finest.timeframe);
+  return src ? { tf: finest.timeframe, src } : null;
+}
+
+/**
+ * Load candles for (market, symbol, timeframe).
  *
- * Pass `count = Infinity` (or a very large number) to load every stored bar.
+ *   1. Try IndexedDB (cache hit → fast path, < 100 ms).
+ *   2. On miss, fetch the CSV straight from the manifest URL and parse it
+ *      (~500 ms for a 100 K-row file). Optionally write the result back
+ *      to IDB in the background so the next open is fast.
+ *   3. If neither IDB nor the manifest has the series, return empty.
+ *
+ * The CSV is the source of truth. IndexedDB is a pure cache — its state
+ * can never block a load.
  */
 export async function loadInitialCandles(
   market: string,
@@ -240,27 +391,70 @@ export async function loadInitialCandles(
   timeframe: Timeframe,
   count: number = INITIAL_BAR_COUNT,
 ): Promise<LoadedCandles> {
+  const preset = getMarketPreset(market);
+  const loadAll = !Number.isFinite(count);
+
+  // ── Fast path: IndexedDB cache hit ────────────────────────────────────
   const sym = await store.getSymbol(market, symbol);
   const available = sym?.availableTimeframes ?? [];
-  const sourceTf = pickSourceTimeframe(timeframe, available);
-  if (!sourceTf) return { candles: [], sourceTimeframe: timeframe, resampled: false };
+  const dbSourceTf = pickSourceTimeframe(timeframe, available);
+  if (dbSourceTf) {
+    const ratio = TIMEFRAME_MINUTES[timeframe] / TIMEFRAME_MINUTES[dbSourceTf];
+    const rawLimit = loadAll
+      ? undefined
+      : dbSourceTf === timeframe ? count : Math.ceil(count * ratio);
+    const rows = await queryCandles({
+      market, symbol, timeframe: dbSourceTf,
+      limit: rawLimit,
+      direction: 'desc',
+    });
+    if (rows.length > 0) {
+      const filtered = preset ? filterBySessionHours(rows, preset.session, dbSourceTf) : rows;
+      const candles = dbSourceTf === timeframe ? filtered : resampleCandles(filtered, timeframe);
+      // eslint-disable-next-line no-console
+      console.info(`[loadInitialCandles] ${market}/${symbol}@${timeframe} — IDB hit (${rows.length} rows)`);
+      return { candles, sourceTimeframe: dbSourceTf, resampled: dbSourceTf !== timeframe };
+    }
+    // eslint-disable-next-line no-console
+    console.info(`[loadInitialCandles] ${market}/${symbol}@${timeframe} — IDB miss (record exists but no rows) → falling through to CSV`);
+  } else {
+    // eslint-disable-next-line no-console
+    console.info(`[loadInitialCandles] ${market}/${symbol}@${timeframe} — not in IDB → will fetch CSV`);
+  }
 
-  const loadAll = !Number.isFinite(count);
-  const ratio = TIMEFRAME_MINUTES[timeframe] / TIMEFRAME_MINUTES[sourceTf];
-  const rawLimit = loadAll
-    ? undefined
-    : sourceTf === timeframe ? count : Math.ceil(count * ratio);
-  const rows = await queryCandles({
-    market, symbol, timeframe: sourceTf,
-    limit: rawLimit,
-    direction: 'desc',
-  });
-  // Drop extended-hours bars (pre-market / after-hours) BEFORE resampling so
-  // higher-TF buckets at the session open aren't polluted by 08:00–09:29 data.
-  const preset = getMarketPreset(market);
-  const filtered = preset ? filterBySessionHours(rows, preset.session) : rows;
-  const candles = sourceTf === timeframe ? filtered : resampleCandles(filtered, timeframe);
-  return { candles, sourceTimeframe: sourceTf, resampled: sourceTf !== timeframe };
+  // ── Fallback: fetch CSV directly from the manifest ─────────────────────
+  const picked = await _pickManifestSource(market, symbol, timeframe);
+  if (!picked) {
+    // eslint-disable-next-line no-console
+    console.warn(`[loadInitialCandles] ${market}/${symbol}@${timeframe} — no manifest entry found`);
+    return { candles: [], sourceTimeframe: timeframe, resampled: false };
+  }
+  // eslint-disable-next-line no-console
+  console.info(`[loadInitialCandles] ${market}/${symbol}@${timeframe} — fetching CSV: ${picked.src.url} (source TF ${picked.tf})`);
+
+  let csvCandles: RawCandle[];
+  try {
+    csvCandles = await _fetchCsvCandles(picked.src.url);
+  } catch (err) {
+    // eslint-disable-next-line no-console
+    console.error(`[loadInitialCandles] ${market}/${symbol}@${timeframe} — CSV fetch failed`, err);
+    throw err;
+  }
+  if (csvCandles.length === 0) {
+    // eslint-disable-next-line no-console
+    console.warn(`[loadInitialCandles] ${market}/${symbol}@${timeframe} — CSV parsed as empty`);
+    return { candles: [], sourceTimeframe: picked.tf, resampled: false };
+  }
+  // eslint-disable-next-line no-console
+  console.info(`[loadInitialCandles] ${market}/${symbol}@${timeframe} — CSV OK: ${csvCandles.length} rows`);
+
+  // Warm the cache for next time (fire-and-forget).
+  _writebackCandles(market, symbol, picked.tf, csvCandles, picked.src);
+
+  const filtered = preset ? filterBySessionHours(csvCandles, preset.session, picked.tf) : csvCandles;
+  const trimmed = loadAll ? filtered : filtered.slice(Math.max(0, filtered.length - Math.ceil((count ?? INITIAL_BAR_COUNT) * (TIMEFRAME_MINUTES[timeframe] / TIMEFRAME_MINUTES[picked.tf]))));
+  const candles = picked.tf === timeframe ? trimmed : resampleCandles(trimmed, timeframe);
+  return { candles, sourceTimeframe: picked.tf, resampled: picked.tf !== timeframe };
 }
 
 /**
@@ -288,7 +482,7 @@ export async function loadCandlesBefore(
     direction: 'desc',
   });
   const preset = getMarketPreset(market);
-  const filtered = preset ? filterBySessionHours(rows, preset.session) : rows;
+  const filtered = preset ? filterBySessionHours(rows, preset.session, sourceTf) : rows;
   const candles = sourceTf === timeframe ? filtered : resampleCandles(filtered, timeframe);
   return { candles, sourceTimeframe: sourceTf, resampled: sourceTf !== timeframe };
 }
@@ -383,8 +577,17 @@ export async function listMarketsWithSymbols(): Promise<MarketWithSymbols[]> {
  */
 export interface PickerSymbol extends store.SymbolRecord {
   status: 'ready' | 'pending';
-  /** Manifest URL for a pending symbol — used to prioritise its ingest. */
+  /**
+   * Manifest URL for the symbol's default (base) timeframe — kept for
+   * backward compat with the pending-ingest path.
+   */
   manifestUrl?: string;
+  /**
+   * Per-timeframe manifest URLs. Populated whenever the manifest advertises
+   * a TF that the DB doesn't yet have. Used by the picker to fetch the
+   * correct CSV when the user selects a TF that isn't in availableTimeframes.
+   */
+  pendingByTf?: Partial<Record<Timeframe, string>>;
 }
 
 export interface PickerMarket {
@@ -395,50 +598,77 @@ export interface PickerMarket {
   symbols: PickerSymbol[];
 }
 
+/**
+ * Build the picker view: manifest is the source of truth for what exists.
+ * IndexedDB is consulted only to mark which series are already cached
+ * (used purely for the "(cached)" label — not required for load).
+ */
 export async function listMarketsForPicker(
   manifestUrl: string = MANIFEST_URL_DEFAULT,
 ): Promise<PickerMarket[]> {
+  // Cache the URL-driven manifest fetch in the module-level cache too.
+  const manifest = await getManifest(manifestUrl);
   const dbMarkets = await listMarketsWithSymbols();
+
+  // Start with every preset market present, empty symbol list.
   const byId = new Map<string, PickerMarket>(
     dbMarkets.map(m => [m.id, {
       id: m.id, label: m.label,
       continuous: m.continuous, timezone: m.timezone,
-      symbols: m.symbols.map(s => ({ ...s, status: 'ready' as const })),
+      symbols: [] as PickerSymbol[],
     }]),
   );
 
-  // Overlay manifest so pending symbols appear too.
-  try {
-    const resp = await fetch(manifestUrl);
-    if (resp.ok) {
-      const manifest = (await resp.json()) as Manifest;
-      for (const src of manifest.sources) {
-        const market = byId.get(src.market);
-        if (!market) continue;
-        const existing = market.symbols.find(s => s.symbol === src.symbol);
-        if (existing) {
-          // Track known TF list without overwriting DB availability.
-          if (!existing.availableTimeframes?.includes(src.timeframe)) {
-            // Manifest advertises this TF; DB doesn't have it yet.
-            existing.manifestUrl = src.url;
-          }
-          continue;
-        }
-        market.symbols.push({
-          market: src.market,
-          symbol: src.symbol,
-          exchange: src.exchange,
-          description: src.description,
-          baseTimeframe: src.timeframe,
-          availableTimeframes: [],
-          updatedAt: 0,
-          status: 'pending',
-          manifestUrl: src.url,
-        });
-      }
+  // Index the DB's cached symbols so we can mark them as already loaded.
+  const dbBySymbol = new Map<string, store.SymbolRecord>();
+  for (const m of dbMarkets) {
+    for (const s of m.symbols) {
+      dbBySymbol.set(`${m.id}::${s.symbol}`, s);
     }
-  } catch {
-    // Manifest missing — return DB-only view.
+  }
+
+  if (manifest) {
+    // Group manifest entries by (market, symbol) — one PickerSymbol per pair.
+    const grouped = new Map<string, { market: string; symbol: string; entries: ManifestSource[] }>();
+    for (const src of manifest.sources) {
+      const key = `${src.market}::${src.symbol}`;
+      let g = grouped.get(key);
+      if (!g) { g = { market: src.market, symbol: src.symbol, entries: [] }; grouped.set(key, g); }
+      g.entries.push(src);
+    }
+
+    for (const { market, symbol, entries } of grouped.values()) {
+      const pmarket = byId.get(market);
+      if (!pmarket) continue;
+      // Finest TF first — this becomes the picker's default `baseTimeframe`.
+      entries.sort((a, b) => TIMEFRAME_MINUTES[a.timeframe] - TIMEFRAME_MINUTES[b.timeframe]);
+      const finest = entries[0];
+      const advertisedTfs = entries.map(e => e.timeframe);
+      const dbRec = dbBySymbol.get(`${market}::${symbol}`);
+      const cachedTfs = new Set(dbRec?.availableTimeframes ?? []);
+      const isFullyCached = advertisedTfs.every(tf => cachedTfs.has(tf));
+
+      pmarket.symbols.push({
+        market, symbol,
+        exchange: finest.exchange ?? dbRec?.exchange,
+        description: finest.description ?? dbRec?.description,
+        baseTimeframe: finest.timeframe,
+        availableTimeframes: advertisedTfs,
+        updatedAt: dbRec?.updatedAt ?? 0,
+        status: isFullyCached ? 'ready' : 'pending',
+        manifestUrl: finest.url,
+        pendingByTf: Object.fromEntries(entries.map(e => [e.timeframe, e.url])),
+      });
+    }
+  }
+
+  // Also surface any DB-only symbols not in the manifest (e.g. user uploads).
+  for (const [key, dbRec] of dbBySymbol) {
+    const [marketId, symbol] = key.split('::');
+    const pmarket = byId.get(marketId);
+    if (!pmarket) continue;
+    if (pmarket.symbols.some(s => s.symbol === symbol)) continue;
+    pmarket.symbols.push({ ...dbRec, status: 'ready' });
   }
 
   for (const m of byId.values()) {

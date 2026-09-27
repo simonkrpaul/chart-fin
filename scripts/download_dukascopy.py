@@ -530,11 +530,11 @@ def main() -> int:
 
     repo_root = pathlib.Path(__file__).resolve().parent.parent
     markets_root = repo_root / "public" / "data" / "markets"
-    # Auto-pick a market bucket if the user didn't override it.
+    # Auto-pick a market bucket if the user didn't override it. Metals
+    # (XAU/XAG) trade on the same session grid as FX, and the app only
+    # defines a `forex` preset — so metals live under `forex/` too.
     if args.market:
         market = args.market
-    elif sym in ("XAUUSD", "XAGUSD"):
-        market = "metals"
     else:
         market = "forex"
     if args.out_dir:
@@ -641,7 +641,7 @@ def main() -> int:
                 "GBPUSD": "British Pound / US Dollar",
                 "USDJPY": "US Dollar / Japanese Yen",
             }.get(sym, sym),
-            "sector": "Metals" if market == "metals" else "Forex",
+            "sector": "Metals" if sym in ("XAUUSD", "XAGUSD") else "Forex",
             "industry": "Spot",
             "source": "Dukascopy Bank SA",
         }

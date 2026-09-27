@@ -22,12 +22,11 @@ import { bootReady } from '../store/chartSession';
 import {
   savePrefs,
   loadPrefs,
-  loadDataset,
+  clearDataset,
   type StoredPrefs,
 } from '../db/persistence';
-import { parseOHLCVFile, detectTimeframe } from '../utils/dataParser';
 import { generateSampleCandles } from '../utils/sampleData';
-import type { IndicatorConfig, RawCandle } from '../types';
+import type { IndicatorConfig } from '../types';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Debounced save (called from Zustand subscription)
@@ -79,7 +78,6 @@ export function usePersistence(): void {
       await bootReady;
 
       const prefs = loadPrefs();
-      const ds    = loadDataset();
       const store = primaryChartStore.getState();
 
       // 1. Theme – apply immediately so no dark→light flash
@@ -100,61 +98,36 @@ export function usePersistence(): void {
         if (prefs?.drawings?.length) {
           primaryChartStore.setState({ drawings: prefs.drawings });
         }
-      } else if (ds?.url) {
-        // ── Legacy: saved dataset URL, no new-style series restored ────────
-        try {
-          const resp = await fetch(ds.url);
-          if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-
-          const text = await resp.text();
-          const file = new File([text], ds.url.split('/').pop()!, { type: 'text/csv' });
-          const { candles } = await parseOHLCVFile(file);
-          if (!candles.length) throw new Error('empty');
-
-          const baseTf = detectTimeframe(candles);
-
-          // 2. Set timeframe to the base TF first so loadCandles records it correctly
-          store.setTimeframe(baseTf);
-
-          // 3. Load candles (also calls recomputeAllIndicators on any pre-added indicators)
-          store.loadCandles(candles, candles[0].timestamp, candles[candles.length - 1].timestamp);
-
-          // 4. Restore indicators
-          for (const cfg of prefs?.indicatorConfigs ?? []) {
-            store.addIndicator(cfg);
-          }
-
-          // 5. Restore drawings
-          if (prefs?.drawings?.length) {
-            primaryChartStore.setState({ drawings: prefs.drawings });
-          }
-
-          // 6. Rebuild overlays – re-derive historical candles from rawCandles
-          const rawCandles: RawCandle[] = primaryChartStore.getState().rawCandles;
-          for (const cfg of prefs?.overlayConfigs ?? []) {
-            const hist = rawCandles.filter(
-              c => c.timestamp >= cfg.sourceStartTimestamp &&
-                   c.timestamp <= cfg.sourceEndTimestamp,
-            );
-            store.addOverlay(cfg, hist);
-          }
-
-          // 7. Switch to saved timeframe (resamples if different from base)
-          if (prefs?.timeframe && prefs.timeframe !== baseTf) {
-            store.setTimeframe(prefs.timeframe);
-          }
-        } catch {
-          applyPrefsToSampleData(prefs);
-        }
       } else {
-        // No saved dataset AND no new-style series → load sample data.
+        // Nothing restored via IndexedDB. Show the built-in sample chart.
+        //
+        // The legacy `loadDataset()` path used to fetch a saved CSV URL and
+        // parse the entire file into memory on the main thread. On a big
+        // dataset (e.g. a 300 MB BTC 1m CSV persisted from a previous
+        // session) that would OOM-crash the tab ("Aw Snap Error 5"). The
+        // multi-market DB layer replaces it — real series come through
+        // `restoreLastSession()`, and if that returns nothing we go
+        // straight to lightweight sample data.
         applyPrefsToSampleData(prefs);
+        // Best-effort: purge the stale dataset key so it can never fire
+        // again on a subsequent boot.
+        try { clearDataset(); } catch { /* ignore */ }
       }
 
       unsubStore = primaryChartStore.subscribe(scheduleSave);
     }
 
-    restore();
+    restore().catch(err => {
+      // Never let a persistence error bubble up to React — the page must
+      // stay interactive even if IndexedDB was wiped or localStorage is
+      // corrupt. Fall back to the built-in sample chart.
+      console.error('[persistence] restore failed — loading sample data', err);
+      try {
+        applyPrefsToSampleData(null);
+      } catch (fallbackErr) {
+        console.error('[persistence] even sample-data fallback failed', fallbackErr);
+      }
+    });
 
     return () => {
       if (unsubStore) unsubStore();
