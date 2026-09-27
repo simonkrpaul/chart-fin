@@ -15,23 +15,18 @@ import { IngestProgressBadge } from './components/IngestProgressBadge';
 import { CandleTooltip } from './components/CandleTooltip';
 import { ChartControls } from './components/ChartControls';
 import { ReplayControls } from './components/ReplayControls';
-import { OverlayPanel } from './components/OverlayPanel';
-import { IndicatorPanel } from './components/IndicatorPanel';
 import { MeasurementOverlay } from './components/MeasurementOverlay';
-import { BacktestPanel } from './components/BacktestPanel';
 import { BacktestReport } from './components/BacktestReport';
-import { TradeJournalPanel } from './components/TradeJournalPanel';
-import { EphemerisPanel } from './components/EphemerisPanel';
-import { CycleCombinerPanel } from './components/CycleCombinerPanel';
 import { GoToDateDialog } from './components/GoToDateDialog';
 import { LayoutGrid } from './components/LayoutGrid';
+import { Sidebar } from './components/Sidebar';
 import { useResizeObserver } from './hooks/useResizeObserver';
 import { useKeyboardShortcuts } from './hooks/useKeyboardShortcuts';
 import { usePersistence } from './hooks/usePersistence';
 import { useLazyBackfill } from './hooks/useLazyBackfill';
 import { requestPersistentStorage } from './db/marketStore';
 import { restoreLastSession, markBootReady } from './store/chartSession';
-import { ensureMarkets, ingestManifest } from './db/marketDb';
+import { ensureMarkets } from './db/marketDb';
 
 // Guards against React 19 StrictMode double-invocation of the boot effect.
 let _bootRan = false;
@@ -52,11 +47,9 @@ function AppInner() {
   // Ask the browser to mark chart-fin-db as persistent so it survives eviction.
   useEffect(() => { void requestPersistentStorage(); }, []);
 
-  // Boot: seed markets, restore last session immediately. The manifest
-  // ingest runs in the background so a fresh clone with 500 CSVs doesn't
-  // block first paint. Module-level flag guards against React 19 StrictMode
-  // double-invocation in dev (otherwise we'd fire two concurrent ingests
-  // and two concurrent series loads).
+  // Boot: seed markets and restore last session. No CSVs are pulled into
+  // IndexedDB up-front — ingestion happens lazily when the user opens a
+  // specific symbol via the picker (see ChartPicker → ingestOne).
   useEffect(() => {
     if (_bootRan) return;
     _bootRan = true;
@@ -64,17 +57,6 @@ function AppInner() {
       await ensureMarkets();
       await restoreLastSession();
       markBootReady();
-      // Only start the background manifest ingest AFTER the initial series
-      // is loaded. Otherwise IDB write contention makes the first chart
-      // paint 3–4× slower on machines with 500+ series to sync.
-      // Small idle-callback so React commits + first paint happen first.
-      const kick = () => { void ingestManifest(undefined, { background: true }); };
-      if ('requestIdleCallback' in window) {
-        (window as unknown as { requestIdleCallback: (cb: () => void) => void })
-          .requestIdleCallback(kick);
-      } else {
-        setTimeout(kick, 500);
-      }
     })();
   }, []);
 
@@ -103,7 +85,6 @@ function AppInner() {
   }, []);
 
   const bg     = themeTokens.background;
-  const border = themeTokens.gridLine;
 
   return (
     <div
@@ -121,25 +102,8 @@ function AppInner() {
       <IngestProgressBadge />
       <GoToDateDialog open={goToDateOpen} onClose={closeGoToDate} />
       <div style={{ display: 'flex', flex: 1, overflow: 'hidden' }}>
-        {/* Left sidebar – fixed width, always operates on the active panel */}
-        <div
-          style={{
-            width: 224,
-            flexShrink: 0,
-            display: 'flex',
-            flexDirection: 'column',
-            height: '100%',
-            borderRight: `1px solid ${border}`,
-            overflowY: 'auto',
-          }}
-        >
-          <IndicatorPanel />
-          <BacktestPanel />
-          <OverlayPanel />
-          <TradeJournalPanel />
-          <EphemerisPanel />
-          <CycleCombinerPanel />
-        </div>
+        {/* Left sidebar – icon rail + single active panel (always targets the active chart) */}
+        <Sidebar />
 
         {/* Chart area */}
         {singlePanel ? (

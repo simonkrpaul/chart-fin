@@ -320,43 +320,14 @@ def split_master(input_path: pathlib.Path, mode: str,
 
 # ── Manifest ───────────────────────────────────────────────────────────────
 
-VALID_TFS = {"1m", "5m", "10m", "15m", "30m", "1h", "2h", "4h", "1d", "1w", "1M"}
+# Delegated to `_manifest.rebuild_manifest` — same helper is used by
+# `bybit_sync.py` so every data-ingest script produces an identical
+# manifest.json format.
+from _manifest import rebuild_manifest as _shared_rebuild_manifest
 
 
 def rebuild_manifest() -> None:
-    sources: list[dict] = []
-    if MARKETS_DIR.exists():
-        for csv_path in sorted(MARKETS_DIR.rglob("*.csv")):
-            stem = csv_path.stem
-            if "_" not in stem:
-                continue
-            symbol, _, tf = stem.rpartition("_")
-            if tf not in VALID_TFS:
-                continue
-            market = csv_path.parent.name
-            entry = {
-                "market": market,
-                "symbol": symbol,
-                "timeframe": tf,
-                "url": "/" + csv_path.relative_to(REPO_ROOT / "public").as_posix(),
-            }
-            meta_file = csv_path.parent / f"{symbol}.meta.json"
-            if meta_file.exists():
-                try:
-                    m = json.loads(meta_file.read_text())
-                    if m.get("exchange"):    entry["exchange"] = m["exchange"]
-                    if m.get("description"): entry["description"] = m["description"]
-                except json.JSONDecodeError:
-                    pass
-            sources.append(entry)
-    manifest = {
-        "version": 1,
-        "generatedAt": datetime.now(tz=timezone.utc).isoformat(),
-        "sources": sources,
-    }
-    MARKETS_DIR.mkdir(parents=True, exist_ok=True)
-    MANIFEST_PATH.write_text(json.dumps(manifest, indent=2))
-    print(f"[manifest] rebuilt · {len(sources)} series")
+    _shared_rebuild_manifest(MARKETS_DIR, repo_root=REPO_ROOT)
 
 
 # ── CLI ────────────────────────────────────────────────────────────────────

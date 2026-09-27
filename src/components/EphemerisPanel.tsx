@@ -886,10 +886,15 @@ const MOON_NODE_PRESETS: TransitPreset[] = [
 
 /** All preset groups by category */
 const ALL_PRESET_CATEGORIES = [
-  { name: 'Venus Helio', presets: VENUS_HELIO_PRESETS },
-  { name: 'Mercury Helio', presets: MERCURY_HELIO_PRESETS },
-  { name: 'Mercury-Sun Helio', presets: MERCURY_SUN_HELIO_PRESETS },
-  { name: 'Moon-N.Node', presets: MOON_NODE_PRESETS },
+  {
+    name: 'Bitcoin High Probable Cycles',
+    subcategories: [
+      { name: 'Venus Helio',       presets: VENUS_HELIO_PRESETS },
+      { name: 'Mercury Helio',     presets: MERCURY_HELIO_PRESETS },
+      { name: 'Mercury-Sun Helio', presets: MERCURY_SUN_HELIO_PRESETS },
+      { name: 'Moon-N.Node',       presets: MOON_NODE_PRESETS },
+    ],
+  },
 ];
 
 function presetToGroup(preset: TransitPreset): Omit<TransitZoneGroup, 'id'> {
@@ -930,6 +935,7 @@ const TransitZonesSection: React.FC<TransitZonesSectionProps> = ({
   const [expanded, setExpanded] = useState(true);
   const [showCustomForm, setShowCustomForm] = useState(false);
   const [openCategory, setOpenCategory] = useState<string | null>(null);
+  const [openSubcategory, setOpenSubcategory] = useState<string | null>(null);
 
   // Custom form state
   const [customPlanet, setCustomPlanet] = useState('Venus');
@@ -1038,20 +1044,68 @@ const TransitZonesSection: React.FC<TransitZonesSectionProps> = ({
 
       {expanded && (
         <>
-          {/* ── Custom Transit Form ─────────────────────────────────── */}
-          <div style={{ marginBottom: 8, borderBottom: `1px solid ${border}`, paddingBottom: 8 }}>
-            <div
-              style={{ fontSize: 10, fontWeight: 600, cursor: 'pointer', marginBottom: 4 }}
+          {/* ── Custom Transit Form (highlighted card) ─────────────── */}
+          <div
+            style={{
+              marginBottom: 10,
+              border: `1px solid ${border}`,
+              borderLeft: `3px solid ${text}`,
+              borderRadius: 5,
+              background: subtle,
+              overflow: 'hidden',
+            }}
+          >
+            <button
+              type="button"
               onClick={() => setShowCustomForm(!showCustomForm)}
+              style={{
+                width: '100%',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                gap: 6,
+                padding: '7px 10px',
+                background: 'transparent',
+                color: text,
+                border: 'none',
+                cursor: 'pointer',
+                fontSize: 11,
+                fontWeight: 700,
+                letterSpacing: 0.3,
+                textAlign: 'left',
+              }}
             >
-              {showCustomForm ? '▾' : '▸'} Custom Calculation
-            </div>
+              <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                <span
+                  aria-hidden="true"
+                  style={{
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    width: 18, height: 18,
+                    borderRadius: 4,
+                    background: 'transparent',
+                    border: `1px solid ${border}`,
+                    color: text,
+                    fontSize: 11,
+                    fontWeight: 700,
+                  }}
+                >
+                  ƒ
+                </span>
+                <span style={{ textTransform: 'uppercase' }}>Custom Calculation</span>
+                <span style={{ fontSize: 9, opacity: 0.6, fontWeight: 400, textTransform: 'none' }}>
+                  build your own transit
+                </span>
+              </span>
+              <span style={{ fontSize: 11, opacity: 0.7 }}>{showCustomForm ? '▾' : '▸'}</span>
+            </button>
 
             {showCustomForm && (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 6, padding: '4px 10px 10px' }}>
                 {/* Coordinate system */}
                 <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
-                  <span style={{ fontSize: 9, opacity: 0.7, width: 55 }}>System:</span>
+                  <span style={{ fontSize: 10, opacity: 0.7, width: 55 }}>System:</span>
                   <select value={customCoordinate} onChange={e => setCustomCoordinate(e.target.value as any)} style={{ ...inp, flex: 1 }}>
                     <option value="heliocentric">Heliocentric</option>
                     <option value="sidereal_lahiri">Sidereal (Lahiri)</option>
@@ -1061,7 +1115,7 @@ const TransitZonesSection: React.FC<TransitZonesSectionProps> = ({
 
                 {/* Planet 1 */}
                 <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
-                  <span style={{ fontSize: 9, opacity: 0.7, width: 55 }}>Planet:</span>
+                  <span style={{ fontSize: 10, opacity: 0.7, width: 55 }}>Planet:</span>
                   <select value={customPlanet} onChange={e => setCustomPlanet(e.target.value)} style={{ ...inp, flex: 1 }}>
                     {PLANET_OPTIONS.map(p => <option key={p} value={p}>{p}</option>)}
                   </select>
@@ -1069,7 +1123,7 @@ const TransitZonesSection: React.FC<TransitZonesSectionProps> = ({
 
                 {/* Planet 2 (optional, for angular diff) */}
                 <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
-                  <span style={{ fontSize: 9, opacity: 0.7, width: 55 }}>Planet 2:</span>
+                  <span style={{ fontSize: 10, opacity: 0.7, width: 55 }}>Planet 2:</span>
                   <select value={customPlanet2} onChange={e => setCustomPlanet2(e.target.value)} style={{ ...inp, flex: 1 }}>
                     <option value="">(none – single planet)</option>
                     {PLANET_OPTIONS.map(p => <option key={p} value={p}>{p}</option>)}
@@ -1080,32 +1134,32 @@ const TransitZonesSection: React.FC<TransitZonesSectionProps> = ({
                 {isAngularDiffMode ? (
                   <>
                     <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
-                      <span style={{ fontSize: 9, opacity: 0.7, width: 55 }}>Start°:</span>
+                      <span style={{ fontSize: 10, opacity: 0.7, width: 55 }}>Start°:</span>
                       <input type="number" value={customStartAngle} onChange={e => setCustomStartAngle(+e.target.value)} style={{ ...inp, width: 60 }} step="0.01" />
                     </div>
                     <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
-                      <span style={{ fontSize: 9, opacity: 0.7, width: 55 }}>End°:</span>
+                      <span style={{ fontSize: 10, opacity: 0.7, width: 55 }}>End°:</span>
                       <input type="number" value={customEndAngle} onChange={e => setCustomEndAngle(+e.target.value)} style={{ ...inp, width: 60 }} step="0.01" />
                     </div>
                   </>
                 ) : (
                   <>
                     <div style={{ display: 'flex', gap: 2, alignItems: 'center' }}>
-                      <span style={{ fontSize: 9, opacity: 0.7, width: 55 }}>Start:</span>
+                      <span style={{ fontSize: 10, opacity: 0.7, width: 55 }}>Start:</span>
                       <input type="number" value={customStartDeg} onChange={e => setCustomStartDeg(+e.target.value)} style={{ ...inp, width: 30 }} min={0} max={29} />
-                      <span style={{ fontSize: 9 }}>°</span>
+                      <span style={{ fontSize: 10 }}>°</span>
                       <input type="number" value={customStartMin} onChange={e => setCustomStartMin(+e.target.value)} style={{ ...inp, width: 30 }} min={0} max={59} />
-                      <span style={{ fontSize: 9 }}>'</span>
+                      <span style={{ fontSize: 10 }}>'</span>
                       <select value={customStartSign} onChange={e => setCustomStartSign(e.target.value)} style={{ ...inp, width: 45 }}>
                         {SIGN_OPTIONS.map(s => <option key={s} value={s}>{s}</option>)}
                       </select>
                     </div>
                     <div style={{ display: 'flex', gap: 2, alignItems: 'center' }}>
-                      <span style={{ fontSize: 9, opacity: 0.7, width: 55 }}>End:</span>
+                      <span style={{ fontSize: 10, opacity: 0.7, width: 55 }}>End:</span>
                       <input type="number" value={customEndDeg} onChange={e => setCustomEndDeg(+e.target.value)} style={{ ...inp, width: 30 }} min={0} max={29} />
-                      <span style={{ fontSize: 9 }}>°</span>
+                      <span style={{ fontSize: 10 }}>°</span>
                       <input type="number" value={customEndMin} onChange={e => setCustomEndMin(+e.target.value)} style={{ ...inp, width: 30 }} min={0} max={59} />
-                      <span style={{ fontSize: 9 }}>'</span>
+                      <span style={{ fontSize: 10 }}>'</span>
                       <select value={customEndSign} onChange={e => setCustomEndSign(e.target.value)} style={{ ...inp, width: 45 }}>
                         {SIGN_OPTIONS.map(s => <option key={s} value={s}>{s}</option>)}
                       </select>
@@ -1119,15 +1173,15 @@ const TransitZonesSection: React.FC<TransitZonesSectionProps> = ({
                     <option value="UP">▲ UP</option>
                     <option value="DOWN">▼ DOWN</option>
                   </select>
-                  <input type="text" placeholder="e.g. 82%" value={customProbability} onChange={e => setCustomProbability(e.target.value)} style={{ ...inp, width: 40 }} />
-                  <input type="color" value={customColor} onChange={e => setCustomColor(e.target.value)} style={{ width: 20, height: 20, padding: 0, border: 'none', cursor: 'pointer' }} />
+                  <input type="text" placeholder="e.g. 82%" value={customProbability} onChange={e => setCustomProbability(e.target.value)} style={{ ...inp, width: 50 }} />
+                  <input type="color" value={customColor} onChange={e => setCustomColor(e.target.value)} style={{ width: 22, height: 22, padding: 0, border: 'none', cursor: 'pointer' }} />
                 </div>
 
                 {/* Scan range */}
                 <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
-                  <span style={{ fontSize: 9, opacity: 0.7, width: 55 }}>Scan:</span>
+                  <span style={{ fontSize: 10, opacity: 0.7, width: 55 }}>Scan:</span>
                   <input type="date" value={customScanStart} onChange={e => setCustomScanStart(e.target.value)} style={{ ...inp, flex: 1 }} />
-                  <span style={{ fontSize: 9 }}>→</span>
+                  <span style={{ fontSize: 10 }}>→</span>
                   <input type="date" value={customScanEnd} onChange={e => setCustomScanEnd(e.target.value)} style={{ ...inp, flex: 1 }} />
                 </div>
 
@@ -1135,57 +1189,80 @@ const TransitZonesSection: React.FC<TransitZonesSectionProps> = ({
                   onClick={computeCustomTransit}
                   disabled={customLoading}
                   style={{
-                    width: '100%', marginTop: 2, padding: '5px 0', fontSize: 10, fontWeight: 600,
-                    background: '#2962ff', color: '#fff', border: 'none', borderRadius: 3,
+                    width: '100%', marginTop: 4, padding: '7px 0', fontSize: 11, fontWeight: 700,
+                    background: '#2962ff', color: '#fff', border: 'none', borderRadius: 4,
                     cursor: customLoading ? 'wait' : 'pointer',
+                    letterSpacing: 0.3,
                   }}
                 >
-                  {customLoading ? '⏳ Computing...' : '+ Compute & Add Transit'}
+                  {customLoading ? '⏳ Computing…' : '+ Compute & Add Transit'}
                 </button>
-                {customError && <div style={{ color: '#ef5350', fontSize: 9 }}>{customError}</div>}
+                {customError && <div style={{ color: '#ef5350', fontSize: 10 }}>{customError}</div>}
               </div>
             )}
           </div>
 
           {/* ── Preset Categories ───────────────────────────────────── */}
-          {ALL_PRESET_CATEGORIES.map(cat => (
-            <div key={cat.name} style={{ marginBottom: 6 }}>
-              <div
-                style={{ fontSize: 10, fontWeight: 600, cursor: 'pointer', marginBottom: 3, opacity: 0.8 }}
-                onClick={() => setOpenCategory(openCategory === cat.name ? null : cat.name)}
-              >
-                {openCategory === cat.name ? '▾' : '▸'} {cat.name} ({cat.presets.length})
-              </div>
-              {openCategory === cat.name && (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 2, paddingLeft: 6 }}>
-                  {cat.presets.map((preset, i) => {
-                    const alreadyAdded = groups.some(g => g.label === preset.label);
-                    return (
-                      <button
-                        key={i}
-                        onClick={() => addGroup(presetToGroup(preset))}
-                        disabled={alreadyAdded}
-                        style={{
-                          display: 'flex', alignItems: 'center', gap: 4,
-                          fontSize: 9, padding: '2px 5px', cursor: alreadyAdded ? 'default' : 'pointer',
-                          background: alreadyAdded ? subtle : 'transparent',
-                          color: alreadyAdded ? text : preset.color,
-                          border: `1px solid ${alreadyAdded ? border : preset.color}`,
-                          borderRadius: 3, textAlign: 'left', opacity: alreadyAdded ? 0.5 : 1,
-                        }}
-                      >
-                        <span style={{ fontWeight: 700 }}>{preset.direction === 'UP' ? '▲' : '▼'}</span>
-                        <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                          {preset.probability} {preset.label}
-                        </span>
-                        {alreadyAdded && <span style={{ fontSize: 8 }}>✓</span>}
-                      </button>
-                    );
-                  })}
+          {ALL_PRESET_CATEGORIES.map(cat => {
+            const totalPresets = cat.subcategories.reduce((n, s) => n + s.presets.length, 0);
+            const catOpen = openCategory === cat.name;
+            return (
+              <div key={cat.name} style={{ marginBottom: 6 }}>
+                <div
+                  style={{ fontSize: 11, fontWeight: 700, cursor: 'pointer', marginBottom: 4, opacity: 0.9 }}
+                  onClick={() => setOpenCategory(catOpen ? null : cat.name)}
+                >
+                  {catOpen ? '▾' : '▸'} {cat.name} ({totalPresets})
                 </div>
-              )}
-            </div>
-          ))}
+                {catOpen && (
+                  <div style={{ paddingLeft: 6, borderLeft: `1px solid ${border}` }}>
+                    {cat.subcategories.map(sub => {
+                      const subKey = `${cat.name}/${sub.name}`;
+                      const subOpen = openSubcategory === subKey;
+                      return (
+                        <div key={sub.name} style={{ marginBottom: 4 }}>
+                          <div
+                            style={{ fontSize: 10, fontWeight: 600, cursor: 'pointer', marginBottom: 3, opacity: 0.8 }}
+                            onClick={() => setOpenSubcategory(subOpen ? null : subKey)}
+                          >
+                            {subOpen ? '▾' : '▸'} {sub.name} ({sub.presets.length})
+                          </div>
+                          {subOpen && (
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: 2, paddingLeft: 6 }}>
+                              {sub.presets.map((preset, i) => {
+                                const alreadyAdded = groups.some(g => g.label === preset.label);
+                                return (
+                                  <button
+                                    key={i}
+                                    onClick={() => addGroup(presetToGroup(preset))}
+                                    disabled={alreadyAdded}
+                                    style={{
+                                      display: 'flex', alignItems: 'center', gap: 4,
+                                      fontSize: 9, padding: '2px 5px', cursor: alreadyAdded ? 'default' : 'pointer',
+                                      background: alreadyAdded ? subtle : 'transparent',
+                                      color: alreadyAdded ? text : preset.color,
+                                      border: `1px solid ${alreadyAdded ? border : preset.color}`,
+                                      borderRadius: 3, textAlign: 'left', opacity: alreadyAdded ? 0.5 : 1,
+                                    }}
+                                  >
+                                    <span style={{ fontWeight: 700 }}>{preset.direction === 'UP' ? '▲' : '▼'}</span>
+                                    <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                      {preset.probability} {preset.label}
+                                    </span>
+                                    {alreadyAdded && <span style={{ fontSize: 8 }}>✓</span>}
+                                  </button>
+                                );
+                              })}
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            );
+          })}
 
           {/* ── Active groups list ──────────────────────────────────── */}
           {groups.length > 0 && (

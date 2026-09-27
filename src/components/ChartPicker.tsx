@@ -13,7 +13,6 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { useChartStore } from '../store/chartStore';
 import {
   ensureMarkets,
-  ingestManifest,
   ingestOne,
   listMarketsForPicker,
   selectableTimeframes,
@@ -170,12 +169,12 @@ export const ChartPicker: React.FC = () => {
   }, []);
 
   const handleRescan = useCallback(async () => {
-    setStatus('Rescan started — badge shows progress. Pick any symbol to jump the queue.');
-    // Fire-and-forget in the background. The progress badge tracks it via
-    // `manifest-ingest-progress` events, and the picker auto-refreshes as
-    // symbols become ready.
-    void ingestManifest(undefined, { force: true, background: true, concurrency: 3 });
+    setStatus('Refreshing symbol list from manifest…');
+    // Just re-read the manifest so any newly-downloaded CSVs (e.g. from the
+    // Python scripts) show up as "pending" symbols. Actual CSV ingestion
+    // happens lazily when the user picks a symbol, so we avoid double work.
     await refresh();
+    setStatus('Symbol list refreshed. Pick a symbol to load it.');
   }, [refresh]);
 
   const handleTogglePin = useCallback(async (e: React.MouseEvent, layout: ChartLayout) => {

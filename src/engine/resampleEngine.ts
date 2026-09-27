@@ -9,8 +9,9 @@
  *   1w: start of ISO week (Monday UTC)
  *   1M: start of UTC calendar month
  */
-import type { RawCandle, Timeframe } from '../types';
+import type { RawCandle, SessionConfig, Timeframe } from '../types';
 import { TIMEFRAME_MINUTES } from './calendarEngine';
+import { toZonedTime } from './tzUtils';
 
 /** Returns true if `target` is a coarser timeframe than `source`. */
 export function isCoarserThan(target: Timeframe, source: Timeframe): boolean {
@@ -20,6 +21,35 @@ export function isCoarserThan(target: Timeframe, source: Timeframe): boolean {
 /** Returns true if the source candles can be resampled into targetTf. */
 export function canResample(sourceTf: Timeframe, targetTf: Timeframe): boolean {
   return TIMEFRAME_MINUTES[targetTf] >= TIMEFRAME_MINUTES[sourceTf];
+}
+
+/**
+ * Drop candles whose timestamps fall outside the session's regular hours
+ * window. This must run BEFORE resampling for session markets so that a
+ * higher-TF bucket (e.g. 09:00 hourly) doesn't silently swallow pre-market
+ * (08:00–09:29) bars alongside the real 09:30 opening bar, which produces
+ * "distorted" candles at the session open on any TF ≥ 15m.
+ *
+ * A no-op for continuous 24/7 markets (crypto, forex) whose session covers
+ * the full day.
+ */
+export function filterBySessionHours(
+  source: RawCandle[],
+  session: SessionConfig,
+): RawCandle[] {
+  const [openH, openM] = session.regularOpen.split(':').map(n => parseInt(n, 10));
+  const [closeH, closeM] = session.regularClose.split(':').map(n => parseInt(n, 10));
+  const openMin = openH * 60 + openM;
+  const closeMin = closeH * 60 + closeM;
+  // Any market whose session covers the full day is a 24/7 market — skip.
+  if (openMin === 0 && closeMin >= 23 * 60 + 59) return source;
+
+  const tz = session.timezone;
+  return source.filter(c => {
+    const local = toZonedTime(new Date(c.timestamp), tz);
+    const min = local.getHours() * 60 + local.getMinutes();
+    return min >= openMin && min < closeMin;
+  });
 }
 
 /**

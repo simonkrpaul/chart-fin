@@ -2,29 +2,39 @@
 """
 bybit_sync.py
 ─────────────────────────────────────────────────────────────────────────────
-Syncs BTCUSDT 1-minute candles from Bybit into public/data/bybit_btc_1m.csv.
+Syncs BTCUSDT (or any Bybit pair) directly into the manifest-aware market
+layout that the frontend auto-ingests on cold boot:
+
+    public/data/markets/crypto/<SYMBOL>_1m.csv
+    public/data/markets/crypto/<SYMBOL>_5m.csv
+    …
+    public/data/markets/manifest.json    (regenerated after write)
+
+Because the manifest lists every CSV in `markets/`, the app streams the new
+symbols straight into IndexedDB on the next reload — no UI ingestion step
+needed. Idempotent: re-runs only fetch the gap since the last stored bar.
 
 Features
 ────────
-  • Fetches up to 5 years of 1-minute history using Bybit v5 REST API
-  • Incremental: on subsequent runs it only fetches data since the last
-    stored candle, so weekly gaps are filled automatically
-  • Also resamples to 5m, 1h, 1d, 1w for quick-loading in the frontend
-  • No API key required (public market data)
+  • Up to 5 years of 1-minute history via Bybit v5 REST API
+  • Incremental sync: only pulls new candles on repeat runs
+  • Resamples to 5m / 1h / 1d / 1w in one pass
+  • Rebuilds `manifest.json` so the app picks up the new series on boot
+  • `--legacy` flag preserves the old flat `public/data/bybit_*.csv` layout
 
 Usage
 ─────
-  # First run — full historical sync (takes ~20-40 mins for 5 years)
+  # Full historical sync (first run, ~20-40 min for 5 years)
   python scripts/bybit_sync.py
 
   # After being offline for a week — only fetches the gap
   python scripts/bybit_sync.py
 
-  # Custom history depth
-  python scripts/bybit_sync.py --years 2
+  # Custom pair or history depth
+  python scripts/bybit_sync.py --symbol ETHUSDT --years 2
 
-  # Custom symbol
-  python scripts/bybit_sync.py --symbol ETHUSDT
+  # Legacy flat layout (public/data/bybit_btcusdt_1m.csv, no manifest update)
+  python scripts/bybit_sync.py --legacy
 """
 
 import argparse
@@ -42,28 +52,59 @@ try:
 except ImportError:
     sys.exit("requests is required: pip install requests")
 
+from _manifest import rebuild_manifest
+
 # ── CLI ────────────────────────────────────────────────────────────────────
 
-parser = argparse.ArgumentParser(description="Sync BTCUSDT 1m candles from Bybit")
+parser = argparse.ArgumentParser(description="Sync a Bybit pair into the manifest layout")
 parser.add_argument("--symbol", default="BTCUSDT", help="Trading pair (default: BTCUSDT)")
 parser.add_argument("--years", type=float, default=5.0, help="Years of history to fetch (default: 5)")
-parser.add_argument("--category", default="linear", help="Bybit category: linear, inverse, spot (default: linear)")
-parser.add_argument("--out-dir", default=None, help="Output directory (default: public/data/)")
+parser.add_argument("--category", default="linear", help="Bybit category: linear | inverse | spot (default: linear)")
+parser.add_argument("--market", default="crypto", help="Market bucket under public/data/markets/ (default: crypto)")
+parser.add_argument("--out-dir", default=None, help="Override output directory (advanced)")
+parser.add_argument("--legacy", action="store_true", help="Write to the old flat public/data/ layout instead of markets/")
+parser.add_argument("--no-manifest", action="store_true", help="Skip the manifest rebuild step at the end")
 args = parser.parse_args()
 
 # ── Paths ─────────────────────────────────────────────────────────────────
 
-REPO_ROOT = pathlib.Path(__file__).resolve().parent.parent
-OUT_DIR = pathlib.Path(args.out_dir) if args.out_dir else REPO_ROOT / "public" / "data"
-OUT_DIR.mkdir(parents=True, exist_ok=True)
+REPO_ROOT   = pathlib.Path(__file__).resolve().parent.parent
+MARKETS_DIR = REPO_ROOT / "public" / "data" / "markets"
 
-SYMBOL = args.symbol
-PREFIX = SYMBOL.lower().replace("/", "")
-FILE_1M = OUT_DIR / f"bybit_{PREFIX}_1m.csv"
-FILE_5M = OUT_DIR / f"bybit_{PREFIX}_5m.csv"
-FILE_1H = OUT_DIR / f"bybit_{PREFIX}_1h.csv"
-FILE_1D = OUT_DIR / f"bybit_{PREFIX}_1d.csv"
-FILE_1W = OUT_DIR / f"bybit_{PREFIX}_1w.csv"
+SYMBOL = args.symbol.upper()
+if args.out_dir:
+    OUT_DIR = pathlib.Path(args.out_dir)
+    PREFIX  = SYMBOL.lower()
+    NAME_1M, NAME_5M, NAME_1H, NAME_1D, NAME_1W = (
+        f"{PREFIX}_1m.csv", f"{PREFIX}_5m.csv", f"{PREFIX}_1h.csv",
+        f"{PREFIX}_1d.csv", f"{PREFIX}_1w.csv",
+    )
+elif args.legacy:
+    OUT_DIR = REPO_ROOT / "public" / "data"
+    PREFIX  = SYMBOL.lower()
+    NAME_1M, NAME_5M, NAME_1H, NAME_1D, NAME_1W = (
+        f"bybit_{PREFIX}_1m.csv", f"bybit_{PREFIX}_5m.csv",
+        f"bybit_{PREFIX}_1h.csv", f"bybit_{PREFIX}_1d.csv",
+        f"bybit_{PREFIX}_1w.csv",
+    )
+else:
+    OUT_DIR = MARKETS_DIR / args.market
+    NAME_1M, NAME_5M, NAME_1H, NAME_1D, NAME_1W = (
+        f"{SYMBOL}_1m.csv", f"{SYMBOL}_5m.csv", f"{SYMBOL}_1h.csv",
+        f"{SYMBOL}_1d.csv", f"{SYMBOL}_1w.csv",
+    )
+
+OUT_DIR.mkdir(parents=True, exist_ok=True)
+FILE_1M = OUT_DIR / NAME_1M
+FILE_5M = OUT_DIR / NAME_5M
+FILE_1H = OUT_DIR / NAME_1H
+FILE_1D = OUT_DIR / NAME_1D
+FILE_1W = OUT_DIR / NAME_1W
+
+# Canonical column order for the manifest-aware layout (matches the Kaggle
+# and Alpaca importers). The optional `symbol` column keeps per-row identity
+# so the frontend picker can label bars even when the CSV path isn't known.
+INCLUDE_SYMBOL_COL = not args.legacy
 
 # ── Bybit REST API ────────────────────────────────────────────────────────
 
@@ -186,6 +227,10 @@ def resample(df: pd.DataFrame, rule: str) -> pd.DataFrame:
 
 
 def save_csv(df: pd.DataFrame, path: pathlib.Path) -> None:
+    if INCLUDE_SYMBOL_COL:
+        # Manifest layout carries the `symbol` column so per-row identity
+        # survives concat / regrouping in the frontend picker.
+        df = df.assign(symbol=SYMBOL)
     df.to_csv(path, index=False)
     size_mb = path.stat().st_size / (1024 * 1024)
     print(f"  Wrote {path.name}: {len(df):,} rows ({size_mb:.1f} MB)")
@@ -250,6 +295,16 @@ def main():
     last_date = pd.Timestamp(int(merged["timestamp"].max()), unit="ms", tz="UTC")
     print(f"\n✓ Sync complete: {first_date.date()} → {last_date.date()}")
     print(f"  {len(merged):,} 1-minute candles")
+
+    # Rebuild manifest so the frontend auto-ingests the new / updated CSVs
+    # on the next cold boot. Skip when writing to a custom out-dir or the
+    # legacy flat layout — those files aren't under markets/.
+    if not args.legacy and not args.out_dir and not args.no_manifest:
+        print()
+        rebuild_manifest(MARKETS_DIR, repo_root=REPO_ROOT)
+        print("  → reload the app in the browser to pick up the new bars")
+    elif args.legacy:
+        print("\n[legacy] flat layout written; use the UI 'Load data' button to ingest.")
 
 
 if __name__ == "__main__":

@@ -20,13 +20,15 @@ Binance mode
   python scripts/download_btc.py --binance
   python scripts/download_btc.py --binance --days 365
 
-Output files written to public/data/
-──────────────────────────────────────
-  btc_1m.csv   – 1-minute bars
-  btc_5m.csv   – 5-minute OHLCV
-  btc_1h.csv   – 1-hour  OHLCV
-  btc_1d.csv   – 1-day   OHLCV
-  btc_1w.csv   – 1-week  OHLCV
+Output files written to public/data/markets/crypto/
+────────────────────────────────────────────────────
+  BTCUSDT_1m.csv   – 1-minute bars
+  BTCUSDT_5m.csv   – 5-minute OHLCV
+  BTCUSDT_1h.csv   – 1-hour  OHLCV
+  BTCUSDT_1d.csv   – 1-day   OHLCV
+  BTCUSDT_1w.csv   – 1-week  OHLCV
+  BTCUSDT.meta.json – symbol metadata
+  ../manifest.json  – regenerated so the picker sees it
 
 Column format expected by chart-fin
 ──────────────────────────────────────
@@ -34,10 +36,17 @@ Column format expected by chart-fin
 
   timestamp: Unix milliseconds UTC
   volume:    BTC volume
+
+Loading into chart-fin
+──────────────────────
+  1. Refresh the browser (⌘R).
+  2. Open Chart Picker → click ↻ Rescan disk if it's already open.
+  3. Under 'crypto' → pick BTCUSDT. One CSV fetch, chart opens.
 """
 
 import sys
 import argparse
+import json
 import pathlib
 import time
 import pandas as pd
@@ -61,8 +70,18 @@ args = parser.parse_args()
 
 # ── Paths ─────────────────────────────────────────────────────────────────
 REPO_ROOT = pathlib.Path(__file__).parent.parent
-OUT_DIR = REPO_ROOT / "public" / "data"
+MARKETS_ROOT = REPO_ROOT / "public" / "data" / "markets"
+OUT_DIR = MARKETS_ROOT / "crypto"
 OUT_DIR.mkdir(parents=True, exist_ok=True)
+
+# Shared helper: rebuilds public/data/markets/manifest.json so the Chart
+# Picker sees the new symbol on refresh.
+import sys as _sys
+_sys.path.insert(0, str(pathlib.Path(__file__).parent))
+try:
+    from _manifest import rebuild_manifest as _rebuild_manifest  # noqa: E402
+except ImportError:
+    _rebuild_manifest = None
 
 DATASET = "mczielinski/bitcoin-historical-data"
 
@@ -215,12 +234,13 @@ def resample(df_ms: pd.DataFrame, rule: str, label: str = "left") -> pd.DataFram
     return ohlcv[["timestamp", "open", "high", "low", "close", "volume"]].reset_index(drop=True)
 
 # ── Write files ───────────────────────────────────────────────────────────
+# Naming: <SYMBOL>_<TF>.csv (uppercase symbol, chart-fin canonical TF codes)
 configs = [
-    ("btc_1m.csv",  None,   clean),          # raw 1-min, no resample
-    ("btc_5m.csv",  "5min", None),
-    ("btc_1h.csv",  "1h",   None),
-    ("btc_1d.csv",  "1D",   None),
-    ("btc_1w.csv",  "1W",   None),
+    ("BTCUSDT_1m.csv",  None,   clean),          # raw 1-min, no resample
+    ("BTCUSDT_5m.csv",  "5min", None),
+    ("BTCUSDT_1h.csv",  "1h",   None),
+    ("BTCUSDT_1d.csv",  "1D",   None),
+    ("BTCUSDT_1w.csv",  "1W",   None),
 ]
 
 for fname, rule, frame in configs:
@@ -230,4 +250,20 @@ for fname, rule, frame in configs:
     size_kb = path.stat().st_size // 1024
     print(f"  Written {path.relative_to(REPO_ROOT)}  ({len(df_out):,} rows, {size_kb:,} KB)")
 
-print("\nDone. Files are in public/data/ — open the chart and click '↑ Load data'.")
+# Sidecar meta.json + manifest rebuild so the browser Chart Picker sees it.
+meta_path = OUT_DIR / "BTCUSDT.meta.json"
+meta_path.write_text(json.dumps({
+    "exchange": "Binance" if args.binance else "Kaggle",
+    "description": "Bitcoin / USDT",
+    "sector": "Crypto",
+    "industry": "Digital asset",
+}, indent=2))
+print(f"  Written {meta_path.relative_to(REPO_ROOT)}")
+
+if _rebuild_manifest is not None:
+    _rebuild_manifest(MARKETS_ROOT)
+    print("  ✓ manifest.json rebuilt.")
+else:
+    print("  ! _manifest.py not found — manifest NOT rebuilt.")
+
+print("\nDone. Refresh the browser → open Chart Picker → BTCUSDT appears in the crypto market.")
