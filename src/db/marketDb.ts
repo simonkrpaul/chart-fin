@@ -20,7 +20,7 @@
 import type { RawCandle, Timeframe } from '../types';
 import { parseOHLCVFile } from '../utils/dataParser';
 import { MARKET_PRESET_LIST, getMarketPreset } from '../engine/marketPresets';
-import { canResample, resampleCandles } from '../engine/resampleEngine';
+import { canResample, resampleCandles, filterBySessionHours } from '../engine/resampleEngine';
 import { TIMEFRAME_MINUTES } from '../engine/calendarEngine';
 import * as store from './marketStore';
 import { invalidateSeries, queryCandles } from './duckdb';
@@ -255,7 +255,11 @@ export async function loadInitialCandles(
     limit: rawLimit,
     direction: 'desc',
   });
-  const candles = sourceTf === timeframe ? rows : resampleCandles(rows, timeframe);
+  // Drop extended-hours bars (pre-market / after-hours) BEFORE resampling so
+  // higher-TF buckets at the session open aren't polluted by 08:00–09:29 data.
+  const preset = getMarketPreset(market);
+  const filtered = preset ? filterBySessionHours(rows, preset.session) : rows;
+  const candles = sourceTf === timeframe ? filtered : resampleCandles(filtered, timeframe);
   return { candles, sourceTimeframe: sourceTf, resampled: sourceTf !== timeframe };
 }
 
@@ -283,7 +287,9 @@ export async function loadCandlesBefore(
     limit: rawLimit,
     direction: 'desc',
   });
-  const candles = sourceTf === timeframe ? rows : resampleCandles(rows, timeframe);
+  const preset = getMarketPreset(market);
+  const filtered = preset ? filterBySessionHours(rows, preset.session) : rows;
+  const candles = sourceTf === timeframe ? filtered : resampleCandles(filtered, timeframe);
   return { candles, sourceTimeframe: sourceTf, resampled: sourceTf !== timeframe };
 }
 

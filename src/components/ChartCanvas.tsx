@@ -7,6 +7,8 @@
  */
 import React, { useRef, useEffect, useCallback, useState } from 'react';
 import { useChartStore } from '../store/chartStore';
+import { useHurstStore } from '../hurst/hurstStore';
+import { renderHurst } from '../hurst/renderer';
 import type { Drawing, DrawingPoint } from '../types';
 import { measureRange } from '../engine/measurementEngine';
 import {
@@ -90,6 +92,12 @@ export const ChartCanvas: React.FC<Props> = ({ width, height }) => {
     resetPriceScale,
   } = useChartStore();
 
+  // Hurst Cycles – isolated store. Subscribing here ensures the canvas
+  // re-renders when Hurst config/output change, without any coupling to
+  // chartStore.
+  const hurstConfig = useHurstStore(s => s.config);
+  const hurstOutput = useHurstStore(s => s.output);
+
   // Bar-pattern drag state (ref to avoid re-renders mid-drag)
   const patternDragStart = useRef<number | null>(null);
   const patternDragEnd   = useRef<number | null>(null);
@@ -169,6 +177,8 @@ export const ChartCanvas: React.FC<Props> = ({ width, height }) => {
     if (cycleCombinerConfig.visible && cycleCombinerOutput) {
       renderCycleCombiner(rc, cycleCombinerOutput, cycleCombinerConfig.color);
     }
+    // Hurst Cycles – isolated module, subscribes independently to its own store.
+    renderHurst(rc, primarySlots, hurstConfig, hurstOutput);
     renderOverlays(rc, visibleOverlays as any);
     renderIndicators(rc, visibleIndicators as any, primarySlots);
     renderDrawings(rc, allDrawings as Drawing[], primarySlots, hoveredId ?? undefined);
@@ -237,6 +247,8 @@ export const ChartCanvas: React.FC<Props> = ({ width, height }) => {
     hoveredId,
     backtestSignals,
     showBacktestSignals,
+    hurstConfig,
+    hurstOutput,
   ]);
 
   useEffect(() => {

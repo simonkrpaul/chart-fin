@@ -2967,8 +2967,7 @@ export function renderEphemerisMarkers(
   const height = vp.mainPaneHeight + vp.subPaneHeight;
   const sw = slotWidth(vp);
 
-  ctx.save();
-
+  ctx.sa
   const fontSize = 9;
   const labelBoxH = fontSize + 4;
   const rowGap = 2;

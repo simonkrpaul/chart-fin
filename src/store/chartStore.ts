@@ -49,12 +49,13 @@ import type {
 } from '../types';
 import { DARK_THEME as darkTheme, LIGHT_THEME as lightTheme, DEFAULT_SESSION } from '../types';
 import { runBacktest as _runBacktest } from '../engine/backtestEngine';
-import { generateSlots, buildTimestampIndex, generateUnconstrainedSlots, INTRADAY_TIMEFRAMES } from '../engine/calendarEngine';
+import { generateSlots, buildTimestampIndex, generateUnconstrainedSlots, INTRADAY_TIMEFRAMES, TIMEFRAME_MINUTES } from '../engine/calendarEngine';
+import { toZonedTime } from '../engine/tzUtils';
 import { normalizeCandles } from '../engine/normalizationEngine';
 import { computeIndicator } from '../engine/indicatorEngine';
 import { detectSwingPoints } from '../engine/indicatorEngine';
 import { buildOffsetOverlay, assignOverlayVisuals } from '../engine/offsetEngine';
-import { resampleCandles, canResample } from '../engine/resampleEngine';
+import { resampleCandles, canResample, filterBySessionHours } from '../engine/resampleEngine';
 import { measureRange } from '../engine/measurementEngine';
 import { parseTradeLogCsv, matchRoundTrips } from '../utils/tradeLogParser';
 
@@ -74,13 +75,71 @@ function _emaSmoothArray(data: (number | null)[], period: number): (number | nul
   return result;
 }
 
-// Filters empty-gap (weekend/holiday) slots out and re-indexes when the user
-// has toggled gap visibility off. Also drops empty trading slots (real data
-// gaps, e.g. a missing Kaggle row) so gaps_off never leaves blank space.
+// Filter slots per the current gap-visibility mode.
+//
+//   session_trading_days
+//     Drop every null-candle slot (overnight, weekend, holiday, real
+//     data gaps). Only actual trading bars remain. slotIndex is
+//     re-numbered so bars pack contiguously.
+//
+//   session_calendar_days
+//     Same candles as trading_days — every real trading bar shown, no
+//     mid-session data-gap columns, no overnight columns. The ONLY thing
+//     added over trading_days is placeholder columns during session hours
+//     on weekend and holiday days, so Fri close → Sat spacer → Sun spacer
+//     → Mon open is visible.
+//
+// Uses overlap semantics on the timeframe bucket so mid-hour session
+// opens (e.g. 09:30 on a 1h chart) still get their opening candle drawn
+// on the aligned 09:00 slot instead of vanishing.
+//
 // Returned array is a new object each call.
-function _applyGapVisibility(slots: CandleSlot[], showEmpty: boolean): CandleSlot[] {
-  if (showEmpty) return slots;
-  const kept = slots.filter(s => s.candle !== null);
+function _applyGapVisibility(
+  slots: CandleSlot[],
+  mode: 'session_trading_days' | 'session_calendar_days',
+  session: SessionConfig,
+  timeframe: Timeframe,
+): CandleSlot[] {
+  if (mode === 'session_trading_days') {
+    const kept = slots.filter(s => s.candle !== null);
+    return kept.map((s, i) => ({ ...s, slotIndex: i }));
+  }
+  // session_calendar_days — need to check weekend/holiday time-of-day.
+  const [openH, openM] = session.regularOpen.split(':').map(n => parseInt(n, 10));
+  const [closeH, closeM] = session.regularClose.split(':').map(n => parseInt(n, 10));
+  const openMin = openH * 60 + openM;
+  const closeMin = closeH * 60 + closeM;
+  const tfMin = TIMEFRAME_MINUTES[timeframe];
+  const tz = session.timezone;
+  const holidaySet = new Set(session.holidays);
+
+  const kept = slots.filter(s => {
+    // Any real trading candle is unconditionally kept. This deliberately does
+    // NOT gate on `status === 'trading'` because status assignment involves
+    // tz math on the slot's midnight boundary, and any subtle bug there
+    // would silently mask real bars. If a candle exists at this slot, we
+    // trust the data and render it. Guarantees Trading Days ⊆ Calendar Days.
+    if (s.candle !== null) return true;
+    // For empty slots, decide weekend/holiday classification directly from
+    // the timestamp (in session tz) rather than trusting `s.status`. Any
+    // slot generator hiccup that mislabels a Sunday would otherwise cause
+    // Sunday spacer columns to silently disappear. Format the date via the
+    // tz-aware formatter so DST and local-midnight edge cases can't shift it.
+    const local = toZonedTime(new Date(s.timestamp), tz);
+    const startMin = local.getHours() * 60 + local.getMinutes();
+    const endMin = startMin + tfMin;
+    if (!(startMin < closeMin && endMin > openMin)) return false;
+    const jsDay = local.getDay();                    // 0=Sun ... 6=Sat
+    const isoWeekday = jsDay === 0 ? 7 : jsDay;      // 1=Mon ... 7=Sun
+    const isTradingDay = session.tradingDays.includes(isoWeekday);
+    const y = local.getFullYear();
+    const m = String(local.getMonth() + 1).padStart(2, '0');
+    const d = String(local.getDate()).padStart(2, '0');
+    const isHoliday = holidaySet.has(`${y}-${m}-${d}`);
+    // Empty slot inside a session-hour window on a non-trading day (weekend
+    // or holiday) → spacer placeholder. All other empty slots → drop.
+    return !isTradingDay || isHoliday;
+  });
   return kept.map((s, i) => ({ ...s, slotIndex: i }));
 }
 
@@ -170,7 +229,28 @@ export interface ChartState {
   theme: 'dark' | 'light';
   themeTokens: ThemeTokens;
   showIndicatorsAndDrawings: boolean;
-  /** When true, weekend/holiday slots render an underscore glyph; when false, they render invisible. */
+  /**
+   * Two-state gap-visibility mode. Source of truth for how empty slots
+   * are filtered before rendering:
+   *   • 'session_trading_days'  – drop every null-candle slot AND every
+   *                                weekend / holiday slot. Trading bars
+   *                                (session hours only) are packed
+   *                                contiguously; Fri close is followed
+   *                                immediately by Mon open.
+   *   • 'session_calendar_days' – drop overnight ('outside_session')
+   *                                slots on trading days, but keep
+   *                                weekend / holiday placeholder columns
+   *                                during the session window so
+   *                                Sat + Sun appear as empty spacers
+   *                                between Fri close and Mon open. Real
+   *                                mid-session data gaps stay visible.
+   */
+  gapVisibility: 'session_trading_days' | 'session_calendar_days';
+  /**
+   * Legacy alias — true whenever `gapVisibility === 'session_calendar_days'`.
+   * Kept in sync so the canvas renderer's underscore-glyph logic works
+   * unchanged.
+   */
   showEmptyGapSlots: boolean;
 
   // Current DB-loaded series context (used for lazy backfill on pan-left).
@@ -224,6 +304,12 @@ export interface ChartActions {
   // Data loading
   setTimeframe: (tf: Timeframe) => void;
   setSession: (s: SessionConfig) => void;
+  /** Override just the session's regular open / close (both "HH:MM"). */
+  setSessionHours: (open: string, close: string) => void;
+  /** Detect the tightest ≥99% session window from the loaded candles. */
+  autoDetectSessionHours: () => void;
+  /** Reset the session to the current market's preset (escape hatch). */
+  resetSessionToMarketPreset: () => void;
   /** Change the display/session timezone and re-generate all slots. */
   setTimezone: (tz: string) => void;
   /**
@@ -325,7 +411,10 @@ export interface ChartActions {
   // UI
   setTheme: (t: 'dark' | 'light') => void;
   toggleIndicatorsAndDrawingsVisibility: () => void;
+  /** Toggle between the two gap-visibility modes. */
   toggleEmptyGapSlots: () => void;
+  /** Set gap visibility directly. */
+  setGapVisibility: (mode: 'session_trading_days' | 'session_calendar_days') => void;
 
   // Layout persistence
   exportLayout: () => ChartLayout;
@@ -400,6 +489,10 @@ export function createChartStore(panelId: string = 'p1'): StoreApi<ChartState & 
     theme: 'dark',
     themeTokens: darkTheme,
     showIndicatorsAndDrawings: true,
+    // Default: calendar-days packing (overnight gaps removed, weekend +
+    // holiday spacer columns preserved so day-to-day rhythm is visible).
+    // Toggle to trading-days to pack Fri close → Mon open contiguously.
+    gapVisibility: 'session_calendar_days',
     showEmptyGapSlots: true,
 
     // ── current DB series ──────────────────────────────────────────────────
@@ -467,14 +560,15 @@ export function createChartStore(panelId: string = 'p1'): StoreApi<ChartState & 
       const baseTf = s.baseTimeframe ?? tf;
       if (base.length === 0) return;
 
+      // Drop extended-hours bars before resample so higher-TF buckets at the
+      // session open don't blend pre-market data with the real opening bar.
+      const filteredBase = filterBySessionHours(base, s.session);
+
       let source: RawCandle[];
       if (canResample(baseTf, tf)) {
-        // Resample base data to the requested timeframe
-        source = resampleCandles(base, tf);
+        source = resampleCandles(filteredBase, tf);
       } else {
-        // Target TF is finer than base — cannot subdivide candles.
-        // Use base candles as-is at their native granularity.
-        source = base;
+        source = filteredBase;
       }
 
       // Build a session-aware slot grid so weekends/holidays become empty
@@ -502,7 +596,7 @@ export function createChartStore(panelId: string = 'p1'): StoreApi<ChartState & 
         normalized = normalizeCandles(slots, sorted, tf);
       }
 
-      normalized = _applyGapVisibility(normalized, s.showEmptyGapSlots);
+      normalized = _applyGapVisibility(normalized, s.gapVisibility, s.session, tf);
 
       const visibleCount = Math.min(200, normalized.length);
 
@@ -532,6 +626,100 @@ export function createChartStore(panelId: string = 'p1'): StoreApi<ChartState & 
       set(state => { state.session = session; });
     },
 
+    /**
+     * Update just the session's regular open / close (both "HH:MM"). Rebuilds
+     * primarySlots so bars outside the new window disappear immediately.
+     */
+    setSessionHours: (open: string, close: string) => {
+      set(state => {
+        state.session = { ...state.session, regularOpen: open, regularClose: close };
+      });
+      const s = get();
+      if (s.baseCandles.length > 0) get().setTimeframe(s.timeframe);
+    },
+
+    /**
+     * Inspect the loaded baseCandles and infer the tightest session window
+     * that contains ≥99% of the bars (per minute-of-day, in session tz).
+     * Applies the result via setSessionHours() so the chart reloads.
+     *
+     * Safety rails:
+     *  - Requires at least MIN_SAMPLE bars total; otherwise no-op.
+     *  - Rejects windows shorter than MIN_WINDOW_MIN minutes to guard against
+     *    sparse data producing a nonsense 25-minute session.
+     */
+    autoDetectSessionHours: () => {
+      const s = get();
+      const src = s.baseCandles.length > 0 ? s.baseCandles : s.rawCandles;
+      const MIN_SAMPLE = 200;         // fewer bars → detection is unreliable
+      const MIN_WINDOW_MIN = 60;      // never collapse below 1h
+      if (src.length < MIN_SAMPLE) {
+        console.warn(`[hurst] auto-detect skipped: only ${src.length} bars available (need ${MIN_SAMPLE}).`);
+        return;
+      }
+      const tz = s.session.timezone;
+      const perMin = new Array(1440).fill(0);
+      for (const c of src) {
+        const local = toZonedTime(new Date(c.timestamp), tz);
+        const m = local.getHours() * 60 + local.getMinutes();
+        perMin[m]++;
+      }
+      const total = src.length;
+      const target = Math.floor(total * 0.99);
+      const prefix = new Array(1441).fill(0);
+      for (let i = 0; i < 1440; i++) prefix[i + 1] = prefix[i] + perMin[i];
+
+      let bestStart = 0, bestEnd = 1440, bestSize = 1440;
+      for (let start = 0; start < 1440; start++) {
+        if (perMin[start] === 0) continue;
+        let lo = start + 1, hi = 1440;
+        while (lo < hi) {
+          const mid = (lo + hi) >>> 1;
+          if (prefix[mid] - prefix[start] >= target) hi = mid;
+          else lo = mid + 1;
+        }
+        if (lo <= 1440 && prefix[lo] - prefix[start] >= target) {
+          const size = lo - start;
+          if (size < bestSize && size >= MIN_WINDOW_MIN) {
+            bestSize = size; bestStart = start; bestEnd = lo;
+          }
+        }
+      }
+      // If we never found a window >= MIN_WINDOW_MIN that meets the 99%
+      // target, expand around the busiest minute to a MIN_WINDOW_MIN
+      // window as a sane fallback.
+      if (bestSize === 1440) {
+        let peak = 0, peakIdx = 0;
+        for (let i = 0; i < 1440; i++) if (perMin[i] > peak) { peak = perMin[i]; peakIdx = i; }
+        bestStart = Math.max(0, peakIdx - MIN_WINDOW_MIN / 2);
+        bestEnd = Math.min(1440, bestStart + MIN_WINDOW_MIN);
+      }
+
+      bestStart = Math.floor(bestStart / 5) * 5;
+      bestEnd = Math.ceil(bestEnd / 5) * 5;
+      const fmt = (m: number) => `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`;
+      get().setSessionHours(fmt(bestStart), fmt(Math.min(bestEnd, 1440)));
+    },
+
+    /**
+     * Reset the session to whatever the current market's preset dictates.
+     * Escape hatch when auto-detect or manual override left the session in
+     * a weird state.
+     */
+    resetSessionToMarketPreset: () => {
+      const s = get();
+      const market = s.currentSeries?.market;
+      if (!market) return;
+      // Use the same lookup path as openSeries.
+      import('../engine/marketPresets').then(({ getMarketPreset }) => {
+        const preset = getMarketPreset(market);
+        if (!preset) return;
+        set(state => { state.session = preset.session; });
+        const cur = get();
+        if (cur.baseCandles.length > 0) get().setTimeframe(cur.timeframe);
+      });
+    },
+
     setTimezone: (tz) => {
       set(state => { state.session = { ...state.session, timezone: tz }; });
       // Re-generate chart with updated timezone – same direct approach as setTimeframe.
@@ -539,11 +727,12 @@ export function createChartStore(panelId: string = 'p1'): StoreApi<ChartState & 
       const base = s.baseCandles.length > 0 ? s.baseCandles : s.rawCandles;
       const baseTf = s.baseTimeframe ?? s.timeframe;
       if (base.length === 0) return;
+      const filteredBase = filterBySessionHours(base, s.session);
       let source: RawCandle[];
       if (canResample(baseTf, s.timeframe)) {
-        source = resampleCandles(base, s.timeframe);
+        source = resampleCandles(filteredBase, s.timeframe);
       } else {
-        source = base;
+        source = filteredBase;
       }
       const sorted = [...source].sort((a, b) => a.timestamp - b.timestamp);
       const normalized: CandleSlot[] = sorted.map((candle, i) => ({
@@ -597,7 +786,7 @@ export function createChartStore(panelId: string = 'p1'): StoreApi<ChartState & 
         normalized = normalizeCandles(slots, raw, timeframe);
       }
 
-      normalized = _applyGapVisibility(normalized, get().showEmptyGapSlots);
+      normalized = _applyGapVisibility(normalized, get().gapVisibility, get().session, timeframe);
       const visibleCount = Math.min(200, normalized.length);
 
       set(state => {
@@ -703,6 +892,8 @@ export function createChartStore(panelId: string = 'p1'): StoreApi<ChartState & 
         slots = generateUnconstrainedSlots(startMs, endMs, timeframe);
         normalized = normalizeCandles(slots, combined, timeframe);
       }
+
+      normalized = _applyGapVisibility(normalized, get().gapVisibility, session, timeframe);
 
       // Lock the viewport to the same rightmost slot the user was looking at
       // so the visible window doesn't jump when we prepend history.
@@ -1489,14 +1680,25 @@ export function createChartStore(panelId: string = 'p1'): StoreApi<ChartState & 
     },
 
     toggleEmptyGapSlots: () => {
+      const next: 'session_trading_days' | 'session_calendar_days' =
+        get().gapVisibility === 'session_trading_days'
+          ? 'session_calendar_days'
+          : 'session_trading_days';
       set(state => {
-        state.showEmptyGapSlots = !state.showEmptyGapSlots;
+        state.gapVisibility = next;
+        state.showEmptyGapSlots = next === 'session_calendar_days';
       });
-      // Rebuild slots so weekend/holiday rows are added or dropped as needed.
       const s = get();
-      if (s.baseCandles.length > 0) {
-        get().setTimeframe(s.timeframe);
-      }
+      if (s.baseCandles.length > 0) get().setTimeframe(s.timeframe);
+    },
+
+    setGapVisibility: (mode) => {
+      set(state => {
+        state.gapVisibility = mode;
+        state.showEmptyGapSlots = mode === 'session_calendar_days';
+      });
+      const s = get();
+      if (s.baseCandles.length > 0) get().setTimeframe(s.timeframe);
     },
 
     // ────────────────────────────────────────────────────────────────────────

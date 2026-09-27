@@ -1,17 +1,105 @@
 # Data ingestion scripts
 
-Two Python scripts fetch historical OHLCV data and drop it where the browser can auto-load it. Same pattern for both: run the script → refresh the app → the new series show up in the chart picker.
+Every downloader script writes CSVs directly into the chart-fin **manifest
+layout** and rebuilds `public/data/markets/manifest.json` before it exits.
+The Chart Picker discovers new symbols on the next browser refresh and
+pulls each CSV into IndexedDB **on demand** — no boot-time bulk load,
+no wasted bandwidth.
+
+## How chart-fin loads your data
+
+```
+                                 ┌───────────────────────┐
+run a downloader script ─────▶   │ public/data/markets/  │
+                                 │   crypto/BTCUSDT_1m…  │
+                                 │   us_equity/AAPL_1d…  │
+                                 │   metals/XAUUSD_1m…   │
+                                 │   forex/EURUSD_1m…    │
+                                 │   manifest.json       │  ← auto-rebuilt
+                                 └───────────────────────┘
+                                          │
+                                          ▼
+                              ⌘R refresh the browser
+                                          │
+                                 (boot is instant — no CSV ingest)
+                                          ▼
+                          Open Chart Picker  →  ↻ Rescan disk
+                                          │
+                 listMarketsForPicker() re-reads manifest.json
+                                          │
+                          New symbol → appears as "pending"
+                                          │
+                             Click the symbol → openSeries()
+                                          │
+                    ingestOne(csvUrl) fetches JUST that one CSV
+                                          │
+                        Parsed into IndexedDB, chart opens
+```
+
+**No hot-reload** — the browser can't watch the filesystem — but the
+round-trip is under a second on typical data. If the picker was already
+open when you ran the script, click **↻ Rescan disk** to re-read the
+manifest without closing/reopening.
 
 ---
 
-## TL;DR
+## TL;DR — one row per script
 
-| Script | Source | What it downloads | Layout |
+| Script | Source | Market bucket | What it downloads |
 | --- | --- | --- | --- |
-| [scripts/download_alpaca.py](../scripts/download_alpaca.py) | Alpaca Market Data v2 | US equities (S&P 500 or your list) | `public/data/markets/us_equity/<SYMBOL>_<tf>.csv` |
-| [scripts/bybit_sync.py](../scripts/bybit_sync.py) | Bybit v5 public API | Crypto (e.g. BTCUSDT), 1m + resampled | `public/data/bybit_<symbol>_<tf>.csv` |
+| [download_alpaca.py](../scripts/download_alpaca.py) | Alpaca Market Data v2 (SDK) | `us_equity`, `crypto` | S&P 500 or your list; stocks + crypto |
+| [download_btc.py](../scripts/download_btc.py) | Binance REST (default) or Kaggle | `crypto` | BTCUSDT 1m + resampled to `1w` |
+| [download_dukascopy.py](../scripts/download_dukascopy.py) | Dukascopy `.bi5` datafeed | `metals`, `forex` | Native M1/H1/D1 or tick-derived custom TFs (XAUUSD, EURUSD, etc.) |
+| [download_kaggle_btc.py](../scripts/download_kaggle_btc.py) | Kaggle `mczielinski/bitcoin-historical-data` | `crypto` | Bitcoin 1m history (~10 years) resampled to full TF ladder |
+| [bybit_sync.py](../scripts/bybit_sync.py) | Bybit v5 public REST | `crypto` | Any pair; 1m + resampled to `1w`. Incremental gap-only re-runs |
+| [import_kaggle_sp500.py](../scripts/import_kaggle_sp500.py) | Local Kaggle master CSV | `us_equity` | Splits ~500 symbols into per-symbol daily CSVs |
+| [import_market.py](../scripts/import_market.py) | Any CSV file | any | Generic promoter — moves an existing CSV into the market layout |
+| [mock_alpaca.py](../scripts/mock_alpaca.py) | Synthetic (Alpaca schema) | `us_equity` | 1-min OHLCV, NYSE session hours, no network needed |
+| [mock_data.py](../scripts/mock_data.py) | Synthetic | 4 profiles | Crypto / US equity / ASX / forex — deterministic random-walk |
+| [fill_gaps.py](../scripts/fill_gaps.py) | Existing Bybit CSV | `crypto` | Detects + backfills missing bars |
 
-Both rewrite [public/data/markets/manifest.json](../public/data/markets/manifest.json) when they finish (the Alpaca script directly, Bybit indirectly via `import_market.py`). The frontend calls `ingestManifest()` on boot and via the **↻ Rescan disk** button in the chart picker.
+All of these use the same helper — [`scripts/_manifest.py`](../scripts/_manifest.py) —
+so the manifest schema stays consistent no matter which script you run.
+
+## The manifest layout
+
+Every downloader writes to:
+
+```
+public/data/markets/
+├── manifest.json                   ← rebuilt at end of each script
+├── crypto/
+│   ├── BTCUSDT_1m.csv              ← <SYMBOL>_<tf>.csv
+│   ├── BTCUSDT_5m.csv
+│   ├── BTCUSDT_1h.csv
+│   ├── BTCUSDT_1d.csv
+│   ├── BTCUSDT_1w.csv
+│   └── BTCUSDT.meta.json           ← sidecar: exchange, description, sector
+├── us_equity/
+│   ├── AAPL_1d.csv
+│   ├── AAPL_1m.csv
+│   └── AAPL.meta.json
+├── metals/
+│   ├── XAUUSD_1m.csv               ← Dukascopy
+│   ├── XAUUSD_1h.csv
+│   └── XAUUSD.meta.json
+└── forex/
+    ├── EURUSD_1m.csv               ← Dukascopy
+    └── EURUSD.meta.json
+```
+
+CSV schema (all downloaders, all timeframes):
+
+```
+timestamp,open,high,low,close,volume
+1695945600000,58432.1,58500.0,58390.5,58471.0,1234.5678
+```
+
+- `timestamp` — Unix **milliseconds** UTC, `open` of the bar
+- `volume` — asset volume (BTC for crypto, shares for stocks, millions of units for FX)
+
+The sidecar `<SYMBOL>.meta.json` is optional and adds `exchange`, `description`,
+`sector`, `industry` fields to the Chart Picker's display.
 
 ---
 
@@ -230,14 +318,16 @@ python scripts/bybit_sync.py
 
 Fetches 1-minute BTCUSDT bars from Bybit's v5 REST API. On subsequent runs it only fetches bars since the last stored candle, so weekend/offline gaps fill automatically.
 
-Output files:
+Output files (chart-fin manifest layout, picker sees them on refresh):
 
 ```
-public/data/bybit_btcusdt_1m.csv    ← full 1m history
-public/data/bybit_btcusdt_5m.csv    ← resampled from 1m
-public/data/bybit_btcusdt_1h.csv    ← resampled
-public/data/bybit_btcusdt_1d.csv    ← resampled
-public/data/bybit_btcusdt_1w.csv    ← resampled
+public/data/markets/crypto/BTCUSDT_1m.csv       ← full 1m history
+public/data/markets/crypto/BTCUSDT_5m.csv       ← resampled from 1m
+public/data/markets/crypto/BTCUSDT_1h.csv       ← resampled
+public/data/markets/crypto/BTCUSDT_1d.csv       ← resampled
+public/data/markets/crypto/BTCUSDT_1w.csv       ← resampled
+public/data/markets/crypto/BTCUSDT.meta.json    ← exchange / description
+public/data/markets/manifest.json               ← rebuilt at end
 ```
 
 ### Common flags
@@ -247,7 +337,10 @@ public/data/bybit_btcusdt_1w.csv    ← resampled
 | `--symbol BTCUSDT` | Trading pair (default `BTCUSDT`) |
 | `--years 5` | Look-back window (default 5, ≈ 20–40 min for full run) |
 | `--category linear` | Bybit market: `linear` perp, `inverse`, `spot` |
-| `--out-dir public/data/` | Where to write CSVs |
+| `--market crypto` | Which `markets/<bucket>/` folder to write into (default `crypto`) |
+| `--out-dir <dir>` | Override the output directory entirely (bypasses `markets/`) |
+| `--legacy` | Write to the old flat `public/data/bybit_<symbol>_<tf>.csv` layout |
+| `--no-manifest` | Skip the manifest rebuild step |
 
 ### Examples
 
@@ -258,26 +351,13 @@ python scripts/bybit_sync.py --symbol ETHUSDT --years 2
 # BTC spot instead of perp
 python scripts/bybit_sync.py --symbol BTCUSDT --category spot
 
-# Custom output location
-python scripts/bybit_sync.py --out-dir /tmp/bybit-dump
+# Custom output location (also skips manifest rebuild — this is a raw dump)
+python scripts/bybit_sync.py --out-dir /tmp/bybit-dump --no-manifest
 ```
-
-### Promote Bybit files to the multi-market layout
-
-`bybit_sync.py` writes into `public/data/` directly, not into the market layout. To make them appear under `crypto` in the chart picker, run the promoter script:
-
-```bash
-for tf in 1m 5m 1h 1d 1w; do
-  python scripts/import_market.py public/data/bybit_btcusdt_${tf}.csv \
-      --market crypto --symbol BTCUSDT --timeframe $tf
-done
-```
-
-`import_market.py` moves (or hard-links) each CSV into `public/data/markets/crypto/BTCUSDT_<tf>.csv` and rewrites `manifest.json`.
 
 ### After the run
 
-1. `pnpm dev` (or refresh the tab).
+1. Refresh the browser (⌘R).
 2. **📈 Open chart → ↻ Rescan disk**.
 3. Pick `Crypto (24/7 UTC) → BTCUSDT → 1m` — everything up to `1M` is available (resampled from 1m where needed).
 
@@ -303,18 +383,178 @@ done
 
 ---
 
+## 3. Dukascopy — forex + metals (XAUUSD, EURUSD, …)
+
+Free tick / native-candle datafeed from Dukascopy Bank SA. No account needed.
+
+### Setup
+
+```bash
+cd /Users/rajanpsi/Dev/simonkrpaul/chart-fin
+pip install requests
+```
+
+### First run — 1 year of XAUUSD 1-minute
+
+```bash
+python scripts/download_dukascopy.py \
+    --symbol XAUUSD --start 2025-01-01 --end today --tf 1m
+```
+
+Output files (auto-picks `metals` for XAU/XAG, `forex` for FX pairs):
+
+```
+public/data/markets/metals/XAUUSD_1m.csv
+public/data/markets/metals/XAUUSD.meta.json
+public/data/markets/manifest.json               ← rebuilt at end
+```
+
+### Multi-timeframe run
+
+```bash
+# Native M1/H1/D1 from Dukascopy (fast — no tick download needed)
+python scripts/download_dukascopy.py \
+    --symbol XAUUSD --start 2024-01-01 --end today \
+    --tf 1m --tf 1h --tf 1d --tf 1w
+```
+
+### Full history since Dukascopy began publishing
+
+```bash
+python scripts/download_dukascopy.py \
+    --symbol XAUUSD --start 2003-05-05 --end today \
+    --tf 1m --resume
+```
+
+Uses a state file so you can Ctrl-C and resume.
+
+### Common flags
+
+| Flag | Purpose |
+| --- | --- |
+| `--symbol XAUUSD` | Any Dukascopy instrument (XAUUSD, EURUSD, GBPJPY, etc.) |
+| `--start 2024-01-01` | Start date (default: earliest known for the symbol) |
+| `--end today` | End date or ISO date |
+| `--tf 1m --tf 1h --tf 1d` | One or more timeframes (repeat the flag) |
+| `--price bid \| ask \| mid` | Which side to write (`mid` requires tick source, slower) |
+| `--source auto \| native \| tick` | `native` = Dukascopy's OHLC files (fast). `tick` = raw ticks aggregated (slower, needed for custom TFs) |
+| `--threads 8` | Parallel HTTP connections (default 8) |
+| `--market metals` | Override the auto-picked market bucket |
+| `--resume` | Skip hourly `.bi5` files already recorded in the state file |
+
+### Dukascopy specifics
+
+| Concern | Answer |
+| --- | --- |
+| Auth | None — public datafeed |
+| File format | Hourly `.bi5` files (LZMA-compressed 20-byte tick records or 24-byte candles) |
+| Point value | 5-decimal for most FX; 3-decimal for XAU/XAG and JPY pairs — script handles automatically |
+| Weekends | Dukascopy skips Saturdays entirely for FX; empty hourly files are legitimate |
+| DST | Timestamps are UTC — handled correctly regardless of your local tz |
+
+### After the run
+
+1. Refresh the browser (⌘R).
+2. **📈 Open chart → ↻ Rescan disk**.
+3. Pick `metals → XAUUSD` (or `forex → EURUSD` etc.) → any TF.
+
+### Troubleshooting
+
+| Symptom | Fix |
+| --- | --- |
+| "no ticks in that hour" during weekend | Expected — Dukascopy has no weekend data for FX |
+| Same-symbol re-run overwrites | Use `--resume` — the state file records completed hourly files |
+| Prices look 1000× too big | Point value mis-detected — add the symbol to `POINT_VALUE` in the script |
+| DNS timeout on `datafeed.dukascopy.com` | Corporate firewall / VPN blocking port 53 or Dukascopy's CDN |
+
+---
+
+## 4. Kaggle Bitcoin — 10 years of BTC/USD 1-minute bars
+
+Handles the [mczielinski/bitcoin-historical-data](https://www.kaggle.com/datasets/mczielinski/bitcoin-historical-data) Kaggle dataset (~330 MB, ~5 M 1-minute rows going back to 2012).
+
+### Setup
+
+```bash
+pip install kagglehub pandas
+export KAGGLE_API_TOKEN=KGAT_...      # from https://www.kaggle.com/settings/account
+```
+
+### Usage
+
+```bash
+python scripts/download_kaggle_btc.py
+
+# Skip re-download if the staged CSV already exists
+python scripts/download_kaggle_btc.py --use-cached
+```
+
+Output files:
+
+```
+public/data/kaggle/btcusd_1-min_data.csv        ← staged raw file (cached, reused with --use-cached)
+public/data/markets/crypto/BTCUSDT_1m.csv       ← reformatted
+public/data/markets/crypto/BTCUSDT_5m.csv       ← resampled from 1m
+public/data/markets/crypto/BTCUSDT_1h.csv
+public/data/markets/crypto/BTCUSDT_1d.csv
+public/data/markets/crypto/BTCUSDT_1w.csv
+public/data/markets/crypto/BTCUSDT.meta.json
+public/data/markets/manifest.json               ← rebuilt at end
+```
+
+### After the run
+
+1. Refresh the browser (⌘R).
+2. **📈 Open chart → ↻ Rescan disk**.
+3. Pick `crypto → BTCUSDT → 1m` — 10 years of history immediately available.
+
+**Note:** If you also run `download_btc.py --binance`, both scripts write to
+the same files. The last one to run wins. `download_kaggle_btc.py` gives
+you deeper history (back to 2012); `download_btc.py --binance` gives you
+the freshest bars (right up to now). You can chain them by running Kaggle
+first, then `download_btc.py --binance --days 30` to top-up the tail.
+
+---
+
+## 5. Mock Alpaca — synthetic US equity 1-minute bars
+
+Offline generator that produces a full month of NYSE-hours 1-minute bars in the exact Alpaca CSV schema. Perfect for demos, tests, or working while your VPN blocks Alpaca / Dukascopy.
+
+### Usage
+
+```bash
+python scripts/mock_alpaca.py                             # 30 days of MOCKAPL
+python scripts/mock_alpaca.py --symbol MOCKMSFT --days 30
+python scripts/mock_alpaca.py --end 2024-12-31 --days 90
+python scripts/mock_alpaca.py --rebuild-manifest-only     # just refresh manifest.json
+```
+
+Output:
+
+```
+public/data/markets/us_equity/MOCKAPL_1m.csv     ← 8,190 rows / 30 days
+public/data/markets/us_equity/MOCKAPL.meta.json
+public/data/markets/manifest.json                ← rebuilt at end
+```
+
+Symbols starting with `MOCK` are safe to use anywhere — they can't collide with real tickers on Alpaca.
+
+---
+
 ## Related scripts
 
 | Script | Purpose |
 | --- | --- |
-| [scripts/import_market.py](../scripts/import_market.py) | Move any CSV into `public/data/markets/<market>/<symbol>_<tf>.csv` and rebuild manifest |
+| [scripts/_manifest.py](../scripts/_manifest.py) | Shared helper — rebuilds `public/data/markets/manifest.json`. All downloaders call this |
+| [scripts/import_market.py](../scripts/import_market.py) | Promote an arbitrary CSV into `public/data/markets/<market>/<symbol>_<tf>.csv` and rebuild manifest |
 | [scripts/import_kaggle_sp500.py](../scripts/import_kaggle_sp500.py) | Split a Kaggle S&P 500 master CSV (~500 symbols in one file) into per-symbol daily CSVs |
 | [scripts/mock_data.py](../scripts/mock_data.py) | Generate synthetic OHLCV for 4 profiles (crypto / us_eq / asx / forex) — no keys needed |
+| [scripts/mock_alpaca.py](../scripts/mock_alpaca.py) | Alpaca-schema equity mock (offline demo) |
 | [scripts/fill_gaps.py](../scripts/fill_gaps.py) | Detect and repair missing bars in an existing CSV (forward-fill / linear / amendments) |
 
 ---
 
-## 3. Kaggle S&P 500 dataset — daily bars for all 500 symbols
+## 6. Kaggle S&P 500 dataset — daily bars for all 500 symbols
 
 Handles Kaggle datasets like [andrewmvd/sp-500-stocks](https://www.kaggle.com/datasets/andrewmvd/sp-500-stocks) that ship a single master CSV with every symbol's daily prices concatenated (~288 MB, ~2.9 M rows).
 

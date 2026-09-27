@@ -15,7 +15,7 @@ import type { OffsetOverlayConfig, OverlayMode } from '../types';
 import type { ScanOutput, ScanMode } from '../engine/correlationEngine';
 
 const MODES: OverlayMode[] = ['overlay', 'normalized', 'percent', 'index100'];
-const QUICK_DAYS = [10, 20, 30, 50, 100, 121, 273, 343, 365];
+const QUICK_DAYS = [10, 20, 30, 50, 87, 100, 121, 273, 343, 365, 526, 833, 1371, 1471, 1800];
 const PALETTE = ['#f5c518','#4fc3f7','#ff7043','#ab47bc','#66bb6a','#ec407a','#ffffff','#ff5252'];
 
 /** Format a Date as YYYY-MM-DD for <input type="date"> */
@@ -47,17 +47,19 @@ export const OverlayPanel: React.FC = () => {
     return map;
   }, [overlayConfigs, overlays, primarySlots]);
 
-  // Default anchor = latest date in the loaded series (or today if empty).
-  const [anchorDate, setAnchorDate] = useState(() => new Date().toISOString().slice(0, 10));
+  // Default anchor = 2020-01-01 (widely-useful reference for offset scans).
+  const [anchorDate, setAnchorDate] = useState('2020-01-01');
   const [offsetDays, setOffsetDays] = useState(273);
 
-  // When a new series loads (or after boot restore), snap the anchor to the
-  // series' last bar so the scanner default has data on both sides.
+  // When a series loads, only snap the anchor away if the user is still on
+  // the older '2025-01-01' or today's-date placeholders. The new 2020-01-01
+  // default is intentional and sticks until the user changes it.
   useEffect(() => {
     if (rawCandles.length === 0) return;
     const lastMs = rawCandles[rawCandles.length - 1].timestamp;
     const iso = new Date(lastMs).toISOString().slice(0, 10);
-    setAnchorDate(prev => prev === '2025-01-01' || prev === new Date().toISOString().slice(0, 10) ? iso : prev);
+    const todayIso = new Date().toISOString().slice(0, 10);
+    setAnchorDate(prev => (prev === '2025-01-01' || prev === todayIso ? iso : prev));
   }, [rawCandles.length]);
   const [mode, setMode] = useState<OverlayMode>('overlay');
   const [color, setColor] = useState(PALETTE[0]);

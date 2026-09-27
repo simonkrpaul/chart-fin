@@ -160,7 +160,11 @@ function generateIntradaySlots(
     for (let ts = midnightUtc; ts < nextMidnightUtc; ts += tfMs) {
       let status: SlotStatus;
       if (dayBackdrop) status = dayBackdrop;
-      else if (ts >= sessionOpenMs && ts < sessionCloseMs) status = sessionStatus;
+      // Overlap semantics: the slot covers [ts, ts+tfMs). Treat it as a
+      // session slot when it overlaps [sessionOpenMs, sessionCloseMs) so
+      // e.g. on a 1h chart with a 09:30 open, the 09:00 slot captures the
+      // 09:30-09:59 opening candle instead of being marked outside_session.
+      else if (ts < sessionCloseMs && ts + tfMs > sessionOpenMs) status = sessionStatus;
       else status = 'outside_session';
       slots.push({ slotIndex: slotIndex++, timestamp: ts, status, candle: null });
     }

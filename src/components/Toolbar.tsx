@@ -1,12 +1,13 @@
 /**
  * Toolbar – drawing tool selector and timeframe switcher.
  */
-import React, { useCallback } from 'react';
+import React, { useCallback, useRef, useState } from 'react';
 import { useChartStore } from '../store/chartStore';
 import { ChartPicker } from './ChartPicker';
 import { LayoutManager } from './LayoutManager';
 import { LayoutSelector } from './LayoutSelector';
 import { TimezoneSelector } from './TimezoneSelector';
+import { SessionHoursPopover } from './SessionHoursPopover';
 import type { DrawingTool, Timeframe } from '../types';
 
 const TOOLS: { key: DrawingTool; label: string; title?: string }[] = [
@@ -36,13 +37,17 @@ export const Toolbar: React.FC = () => {
     setTheme,
     showIndicatorsAndDrawings,
     toggleIndicatorsAndDrawingsVisibility,
-    showEmptyGapSlots,
+    gapVisibility,
     toggleEmptyGapSlots,
+    session,
     undoDrawing,
     redoDrawing,
     past,
     future,
   } = useChartStore();
+
+  const sessionBadgeRef = useRef<HTMLButtonElement | null>(null);
+  const [sessionPopoverOpen, setSessionPopoverOpen] = useState(false);
 
   const bg = theme === 'dark' ? '#1e222d' : '#f0f3fa';
   const text = theme === 'dark' ? '#d1d4dc' : '#131722';
@@ -113,12 +118,45 @@ export const Toolbar: React.FC = () => {
       </button>
 
       <button
-        style={btn(!showEmptyGapSlots)}
+        style={btn(gapVisibility !== 'session_trading_days')}
         onClick={toggleEmptyGapSlots}
-        title="Toggle empty gap (weekend/holiday) placeholder candles"
+        title={
+          gapVisibility === 'session_trading_days'
+            ? 'Trading Session · Trading Days — session-hour bars only, weekends & holidays skipped. Click to switch to Calendar Days.'
+            : 'Trading Session · Calendar Days — session-hour bars only, weekends & holidays shown as empty spacer columns. Click to switch to Trading Days.'
+        }
       >
-        {showEmptyGapSlots ? '_ Gaps: On' : '_ Gaps: Off'}
+        {gapVisibility === 'session_trading_days'
+          ? 'Trading Days'
+          : 'Calendar Days'}
       </button>
+
+      {/* Session badge — shows the active trading window so the user knows
+          what "session hours" means for the current market. */}
+      <button
+        ref={sessionBadgeRef}
+        onClick={() => setSessionPopoverOpen(o => !o)}
+        title={`Session hours: ${session.regularOpen}–${session.regularClose} ${session.timezone}. Click to override or auto-detect from the loaded data.`}
+        style={{
+          fontSize: 10,
+          padding: '3px 8px',
+          borderRadius: 4,
+          border: `1px solid ${border}`,
+          background: 'transparent',
+          color: text,
+          opacity: 0.8,
+          fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
+          whiteSpace: 'nowrap',
+          cursor: 'pointer',
+        }}
+      >
+        🕒 {session.regularOpen}–{session.regularClose} {session.timezone.split('/').pop()} ▾
+      </button>
+      <SessionHoursPopover
+        anchorRef={sessionBadgeRef}
+        open={sessionPopoverOpen}
+        onClose={() => setSessionPopoverOpen(false)}
+      />
 
       <div style={{ width: 1, height: 20, background: border, margin: '0 6px' }} />
 

@@ -569,7 +569,7 @@ export const DARK_THEME: ThemeTokens = {
   bearWick: '#ef5350',
   volume: '#5d606b',
   sessionShade: 'rgba(255,255,255,0.02)',
-  missingSlot: 'rgba(255,255,255,0.03)',
+  missingSlot: 'rgba(255,255,255,0.08)',
 };
 
 export const LIGHT_THEME: ThemeTokens = {
@@ -585,7 +585,7 @@ export const LIGHT_THEME: ThemeTokens = {
   bearWick: '#ef5350',
   volume: '#b2b5be',
   sessionShade: 'rgba(0,0,0,0.02)',
-  missingSlot: 'rgba(0,0,0,0.02)',
+  missingSlot: 'rgba(0,0,0,0.06)',
 };
 
 // ─────────────────────────────────────────────────────────────────────────────

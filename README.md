@@ -401,21 +401,28 @@ charting library — so the pipeline is inspectable end-to-end.
 
 - **Candlestick chart** with volume sub-pane, price scale (autoFit + manual pan/scale), hover crosshair with persistent OHLC tooltip.
 - **Timeframes** — `1m`, `5m`, `10m`, `15m`, `1h`, `4h`, `1d`, `1w`, `1M`. Coarse timeframes auto-resample from the finest loaded base data.
-- **Multi-market ingestion** via a unified `ingestionService` with 5 adapters:
+- **Multi-market ingestion** via a unified `ingestionService` with 6 adapters:
   - **Bybit** REST + WebSocket (BTC/USDT etc., minute-to-week bulk sync in [`scripts/bybit_sync.py`](scripts/bybit_sync.py))
   - **Alpaca** stocks + crypto (SDK-based, S&P 500 + crypto majors via [`scripts/download_alpaca.py`](scripts/download_alpaca.py))
+  - **Dukascopy** forex + CFDs (self-contained LZMA/.bi5 downloader for XAUUSD etc., see [`scripts/download_dukascopy.py`](scripts/download_dukascopy.py))
   - **Kaggle** bulk S&P 500 daily (skip / append / overwrite modes, [`scripts/import_kaggle_sp500.py`](scripts/import_kaggle_sp500.py))
   - **CSV** file / URL loader
-  - **Mock** deterministic random-walk generator (for offline / demo)
+  - **Mock** deterministic random-walk generator including a full Alpaca-schema equity generator ([`scripts/mock_alpaca.py`](scripts/mock_alpaca.py))
+- **On-demand ingest** — no boot-time manifest sweep. `listMarketsForPicker()` overlays the manifest on the DB view so unimported symbols show as **pending**; clicking one triggers a single-CSV `ingestOne()` fetch. Zero wasted bandwidth, no double-work when re-downloading from a script.
 - **IndexedDB persistence** (`chart-fin-db`, via `idb`) — markets, symbols, OHLCV, layouts, settings. Manifest-cache-aware ingest, single-flight write locks, ~50 k-candle chunking with fire-and-forget puts.
-- **Chart picker** listing all locally-cached series and pending manifest entries, with live progress updates during background ingest.
+- **Chart picker** listing all locally-cached series and pending manifest entries. Refresh button re-reads the manifest so newly-added CSVs from Python scripts appear immediately.
 - **TF-aware loader** — picking `1d` when the store has `1m` transparently resamples on the fly.
 
 ### Time & calendar engine
 
 - **UTC-first daily / weekly / monthly slot generation** — every raw daily bar (Kaggle 00:00 UTC, Bybit 00:00 UTC, Alpaca 00:00 UTC) maps 1-to-1 to a slot regardless of the user's session timezone. Slot timestamps are anchored at 12:00 UTC so any display tz (Sydney, NY, LA, UTC) renders the correct calendar date.
 - **Session-tz-aware intraday** — 5 m / 15 m / 1 h grids know NYSE 09:30–16:00 ET, half-day early closes, ASX / LSE / futures sessions.
-- **Uniform 24 h intraday grid for non-continuous markets** — US equities and other session markets now fill the overnight window with `outside_session` placeholder slots so intraday offset overlays render continuously through the whole week; toggle "Show empty gap slots" off to collapse back to a compact session-only ribbon.
+- **Uniform 24 h intraday grid for non-continuous markets** — US equities and other session markets fill the overnight window with `outside_session` placeholder slots which are then removed by the gap-visibility filter, so intraday charts never carry 16:00→08:00 empty air.
+- **Two gap-visibility modes** (toolbar toggle):
+  - **Calendar Days** *(default)* — real trading-session candles + session-hour-wide placeholder columns for weekends and holidays. Fri close → Sat spacer → Sun spacer → Mon open. Overnight always removed.
+  - **Trading Days** — only real trading-session candles, packed contiguously. Fri close is directly adjacent to Mon open.
+  - Both modes use overlap semantics for session boundaries, so mid-hour session opens (e.g. 09:30 on a 1h chart) show up correctly on the aligned 09:00 slot.
+  - Details in [`docs/gap-visibility.md`](docs/gap-visibility.md).
 - **Gap handling** — weekends, market holidays and half-days are separate slot statuses with underscore-glyph placeholders (D/W/M) that never collapse silently. Missing trading bars (real data gaps such as a stranded Kaggle row) are treated identically.
 
 ### Indicators
@@ -467,6 +474,19 @@ Configured & rendered live via the `IndicatorPanel`. Each indicator persists in 
 - Sum / product of arbitrary sine cycles + astronomical cycles; forward-project a synthetic price series to compare against the primary.
 - Cycles are added / edited in the [`CycleCombinerPanel`](src/components/CycleCombinerPanel.tsx).
 
+### Hurst Cycles
+
+Empirical nested-cycle analysis per J.M. Hurst (1970 / 1973 — *not* a sine-wave synthesizer). Everything is computed from the actual price series.
+
+- **CMA** (Centered Moving Average) — length = period. Trend estimate; stops period/2 bars before the last bar (Hurst's "half-span problem").
+- **Detrended** — `close − CMA`. Exposes the cycle at that period.
+- **FLD** (Future Line of Demarcation) — `(H+L)/2` shifted forward by period/2 bars. Price crossings give buy/sell signals with target = distance-at-crossover.
+- **Troughs** — local minima in the detrended series, at least period·(1 − tolerance) bars apart. Longer-cycle troughs align with shorter-cycle troughs (Hurst synchronicity emerges).
+- **Projection window** — shaded band `[last + (1−tol)·period, last + (1+tol)·period]` marks where the next trough is expected.
+- **Envelope** — optional ±amplitude bands around the CMA.
+- Ships with Hurst's classical **Nominal Model** presets (18y / 9y / 4.5y / 54w / 18w / 9w / 20d / 10d / 5d) in bars.
+- Fully isolated in [`src/hurst/`](src/hurst/) — its own Zustand store, engine, renderer, and panel. Doesn't touch `chartStore` at all. Docs / rationale in the file headers.
+
 ### Ephemeris integration
 
 Requires the local ephemeris server ([`scripts/ephemeris_server.py`](scripts/ephemeris_server.py), pyswisseph + `.se1` data files).
@@ -489,6 +509,20 @@ Requires the local ephemeris server ([`scripts/ephemeris_server.py`](scripts/eph
 - **Save / load layouts** — series identity, indicators, overlays, drawings, viewport, price scale, theme all round-trip through IndexedDB.
 - **Auto-restore last session** on boot; single-flight guards protect against StrictMode double-mounts.
 
+### Sidebar
+
+The left column is a **vertical icon rail + single active panel** so long forms (Ephemeris, Offset Overlays with many entries) never push the others off-screen. See [`src/components/Sidebar.tsx`](src/components/Sidebar.tsx).
+
+- 📈 **Indicators**
+- ⚡ **Strategy Tester** (backtest)
+- 📊 **Offset Overlays**
+- 📝 **Trade Journal**
+- ○□△ **Ephemeris** (Gann circle-square-triangle glyph)
+- 🌀 **Cycle Combiner**
+- 〰️ **Hurst Cycles**
+
+Only one panel is mounted at a time. Click the active tab again to collapse and reclaim chart width. The `«` / `»` button at the bottom of the rail also collapses. Active tab + collapsed state persist to `localStorage`.
+
 ### Timezone
 
 - IANA `TimezoneSelector` — change display tz on the fly for intraday; D/W/M always render as UTC calendar dates for consistency across users.
@@ -502,9 +536,11 @@ Scripts in `scripts/`:
 | `bybit_sync.py` | Bulk Bybit BTC/USDT + append-only incremental daily update |
 | `download_btc.py` | Kaggle BTC historical → normalized `btc_*.csv` |
 | `download_alpaca.py` | Alpaca stock (S&P 500) & crypto majors → `public/data/markets/…` |
+| `download_dukascopy.py` | Dukascopy forex / CFDs (XAUUSD, EURUSD, …) via LZMA `.bi5` datafeed; native M1/H1/D1 or tick-derived custom TFs; resume + concurrency + XAUUSD-aware point value |
+| `mock_alpaca.py` | Synthetic 1-minute equity bars in exact Alpaca schema; NYSE session hours; auto-updates the manifest |
 | `import_kaggle_sp500.py` | Kaggle S&P 500 daily → per-symbol CSVs; skip / append / overwrite modes; auto raises OS fd limit on macOS |
 | `import_market.py` | Generic per-market normalized import |
-| `mock_data.py` | Deterministic OHLCV walk for offline demo |
+| `mock_data.py` | Deterministic OHLCV walk for offline demo (4 market profiles) |
 | `fill_gaps.py` | Bybit-only gap-filler for historical holes |
 | `download_kaggle_btc.py` | Kaggle Bitcoin dataset downloader |
 | `compute_all_transits.py` | Batch precompute planetary transit windows |
