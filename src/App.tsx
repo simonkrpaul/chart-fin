@@ -54,8 +54,19 @@ function AppInner() {
     if (_bootRan) return;
     _bootRan = true;
     (async () => {
-      await ensureMarkets();
-      await restoreLastSession();
+      try {
+        await ensureMarkets();
+      } catch (err) {
+        console.error('[boot] ensureMarkets failed — continuing without preset markets', err);
+      }
+      try {
+        await restoreLastSession();
+      } catch (err) {
+        // A restored series might reference a symbol that no longer exists
+        // in IndexedDB (e.g. user just wiped chart-fin-db). Log and continue
+        // so the picker can still open and let the user pick a fresh series.
+        console.error('[boot] restoreLastSession failed — will fall back to sample data', err);
+      }
       markBootReady();
     })();
   }, []);

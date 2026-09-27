@@ -13,8 +13,8 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { useChartStore } from '../store/chartStore';
 import {
   ensureMarkets,
-  ingestOne,
   listMarketsForPicker,
+  refreshManifest,
   selectableTimeframes,
   type PickerMarket,
 } from '../db/marketDb';
@@ -119,28 +119,10 @@ export const ChartPicker: React.FC = () => {
     setBusy(true);
     const t0 = performance.now();
     try {
-      // Priority ingest: if the picked symbol is still "pending" in the
-      // manifest (background ingest hasn't reached it yet), fetch just that
-      // one CSV now so the user doesn't wait for the whole queue.
-      if (currentSymbolRecord && currentSymbolRecord.status === 'pending' && currentSymbolRecord.manifestUrl) {
-        setStatus(`Fetching ${symbol}…`);
-        try {
-          const written = await ingestOne({
-            market: marketId,
-            symbol,
-            timeframe: currentSymbolRecord.baseTimeframe,
-            url: currentSymbolRecord.manifestUrl,
-          });
-          setStatus(`Fetched ${written.toLocaleString()} rows, opening…`);
-        } catch (e) {
-          setStatus(`✗ Priority fetch failed: ${(e as Error).message}`);
-          setBusy(false);
-          return;
-        }
-      } else {
-        setStatus(loadAll ? 'Loading everything…' : 'Loading…');
-      }
-
+      // openSeries → loadInitialCandles will hit the IDB cache first and
+      // fall back to fetching the CSV directly from the manifest URL if
+      // the cache is empty. No manual pre-ingest needed.
+      setStatus(loadAll ? 'Loading everything…' : 'Loading…');
       const res = await openSeries(marketId, symbol, tf, loadAll ? Infinity : 2000);
       if (!res.ok) { setStatus(res.message ?? 'Failed'); setBusy(false); return; }
       const dt = (performance.now() - t0).toFixed(1);
@@ -151,7 +133,7 @@ export const ChartPicker: React.FC = () => {
     } finally {
       setBusy(false);
     }
-  }, [marketId, symbol, tf, loadAll, currentSymbolRecord]);
+  }, [marketId, symbol, tf, loadAll]);
 
   const handleOpenLayout = useCallback(async (layout: ChartLayout) => {
     setBusy(true); setStatus(`Loading "${layout.name}"…`);
@@ -170,9 +152,7 @@ export const ChartPicker: React.FC = () => {
 
   const handleRescan = useCallback(async () => {
     setStatus('Refreshing symbol list from manifest…');
-    // Just re-read the manifest so any newly-downloaded CSVs (e.g. from the
-    // Python scripts) show up as "pending" symbols. Actual CSV ingestion
-    // happens lazily when the user picks a symbol, so we avoid double work.
+    refreshManifest();  // Drop the cached manifest so next call re-fetches.
     await refresh();
     setStatus('Symbol list refreshed. Pick a symbol to load it.');
   }, [refresh]);
@@ -284,12 +264,15 @@ export const ChartPicker: React.FC = () => {
                   style={{ ...btnStyle, width: '100%', marginBottom: 6 }}
                 >
                   {(currentMarket?.symbols ?? []).map(s => {
-                    const suffix = s.status === 'pending'
-                      ? '(pending)'
-                      : ((s.availableTimeframes ?? []).join(', ') || 'no data');
+                    // Every symbol advertised in the manifest is loadable
+                    // (the CSV fetch fallback covers the "not yet cached"
+                    // case transparently). Show the TFs the manifest has;
+                    // no more "pending" gate.
+                    const tfs = (s.availableTimeframes ?? []).join(', ') || 'no data';
+                    const cached = s.status === 'ready' ? ' ✓' : '';
                     return (
                       <option key={s.symbol} value={s.symbol}>
-                        {s.symbol} ({suffix})
+                        {s.symbol} ({tfs}){cached}
                       </option>
                     );
                   })}

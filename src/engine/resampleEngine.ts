@@ -30,13 +30,23 @@ export function canResample(sourceTf: Timeframe, targetTf: Timeframe): boolean {
  * (08:00–09:29) bars alongside the real 09:30 opening bar, which produces
  * "distorted" candles at the session open on any TF ≥ 15m.
  *
+ * Only runs for INTRADAY source timeframes. Daily / weekly / monthly bars
+ * are stamped at midnight UTC (or ~19:00 local for NY-based markets),
+ * which is always outside the 09:30–16:00 session window — filtering them
+ * would drop every single bar. Weekend / holiday handling for daily bars
+ * happens later, in the gap-visibility filter.
+ *
  * A no-op for continuous 24/7 markets (crypto, forex) whose session covers
  * the full day.
  */
 export function filterBySessionHours(
   source: RawCandle[],
   session: SessionConfig,
+  sourceTf?: Timeframe,
 ): RawCandle[] {
+  // Skip for daily-or-coarser TFs — one bar per day means no intraday
+  // session windowing is meaningful.
+  if (sourceTf === '1d' || sourceTf === '1w' || sourceTf === '1M') return source;
   const [openH, openM] = session.regularOpen.split(':').map(n => parseInt(n, 10));
   const [closeH, closeM] = session.regularClose.split(':').map(n => parseInt(n, 10));
   const openMin = openH * 60 + openM;
