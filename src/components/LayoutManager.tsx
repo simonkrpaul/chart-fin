@@ -7,12 +7,13 @@
  */
 import React, { useState, useRef, useEffect } from 'react';
 import { useChartStore } from '../store/chartStore';
+import { openLayout } from '../store/chartSession';
 import { saveLayout, listLayouts, deleteLayout } from '../db/persistence';
 import { saveLayoutDb, deleteLayoutDb } from '../db/marketStore';
 import type { ChartLayout } from '../types';
 
 export const LayoutManager: React.FC = () => {
-  const { exportLayout, importLayout, theme } = useChartStore();
+  const { exportLayout, theme } = useChartStore();
 
   const [open, setOpen]       = useState(false);
   const [name, setName]       = useState('');
@@ -56,10 +57,21 @@ export const LayoutManager: React.FC = () => {
     setTimeout(() => setStatus(''), 2500);
   }
 
-  function handleLoad(layout: ChartLayout) {
-    importLayout(layout);
-    setStatus(`✓ Loaded "${layout.name}"`);
+  async function handleLoad(layout: ChartLayout) {
+    setStatus(`Loading "${layout.name}"…`);
     setOpen(false);
+    try {
+      // openLayout re-fetches the series, then loadCandles rebuilds
+      // indicators + overlays from the restored configs. Falls back to a
+      // plain importLayout if no series is attached to the layout.
+      const res = await openLayout(layout);
+      setStatus(res.ok
+        ? `✓ Loaded "${layout.name}"`
+        : `⚠ ${res.message ?? 'Failed to load layout'}`);
+    } catch (err) {
+      console.error('[LayoutManager] load failed', err);
+      setStatus(`⚠ Load failed: ${(err as Error).message}`);
+    }
     setTimeout(() => setStatus(''), 2500);
   }
 

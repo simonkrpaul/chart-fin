@@ -95,6 +95,17 @@ export function usePersistence(): void {
         for (const cfg of prefs?.indicatorConfigs ?? []) {
           store.addIndicator(cfg);
         }
+        // Re-attach saved offset overlays. addOverlay resolves historical
+        // candles from the just-loaded baseCandles/rawCandles. If the saved
+        // overlay's source range predates the initial load window the
+        // overlay stays empty until a pan-left lazy-backfill covers it.
+        for (const cfg of prefs?.overlayConfigs ?? []) {
+          try {
+            store.addOverlay(cfg, []);
+          } catch (err) {
+            console.warn('[persistence] failed to reattach overlay', cfg.id, err);
+          }
+        }
         if (prefs?.drawings?.length) {
           primaryChartStore.setState({ drawings: prefs.drawings });
         }
@@ -151,6 +162,10 @@ function applyPrefsToSampleData(prefs: StoredPrefs | null): void {
   // Use saved indicators if available; otherwise fall back to the single default
   const indicators = prefs?.indicatorConfigs?.length ? prefs.indicatorConfigs : DEFAULT_INDICATORS;
   for (const cfg of indicators) store.addIndicator(cfg);
+
+  for (const cfg of prefs?.overlayConfigs ?? []) {
+    try { store.addOverlay(cfg, []); } catch { /* skip broken overlay */ }
+  }
 
   if (prefs?.drawings?.length) primaryChartStore.setState({ drawings: prefs.drawings });
 }

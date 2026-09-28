@@ -111,11 +111,16 @@ export async function openLayout(layout: ChartLayout): Promise<OpenResult> {
   let sourceTf: Timeframe | undefined;
   let resampled = false;
   if (layout.series) {
+    // Coarse TFs: load full history so overlays that reference older dates
+    // resolve on first paint without needing a pan-left backfill.
+    const coarse = layout.series.timeframe === '1d'
+      || layout.series.timeframe === '1w'
+      || layout.series.timeframe === '1M';
     const res = await loadInitialCandles(
       layout.series.market,
       layout.series.symbol,
       layout.series.timeframe,
-      2000,
+      coarse ? Infinity : 2000,
     );
     if (res.candles.length > 0) {
       const preset = presetFor(layout.series.market);
@@ -127,6 +132,23 @@ export async function openLayout(layout: ChartLayout): Promise<OpenResult> {
         symbol: layout.series.symbol,
         timeframe: layout.series.timeframe,
       });
+
+      // loadCandles resets the viewport to the latest bar. Reapply the saved
+      // viewport so the chart shows the same slot the user had open.
+      if (layout.viewport) {
+        const s = primaryChartStore.getState();
+        const slotCount = s.primarySlots.length;
+        const savedFirst = Math.min(
+          Math.max(0, layout.viewport.firstSlotIndex),
+          Math.max(0, slotCount - 1),
+        );
+        const savedCount = Math.max(1, layout.viewport.visibleSlotCount);
+        s.setViewport({
+          firstSlotIndex: savedFirst,
+          visibleSlotCount: savedCount,
+        });
+      }
+
       rows = res.candles.length;
       sourceTf = res.sourceTimeframe;
       resampled = res.resampled;

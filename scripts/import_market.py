@@ -30,13 +30,18 @@ import argparse
 import json
 import pathlib
 import shutil
-from datetime import datetime, timezone
+import sys
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parent.parent
 MARKETS_DIR = REPO_ROOT / "public" / "data" / "markets"
 MANIFEST_PATH = MARKETS_DIR / "manifest.json"
 
-VALID_TFS = {"1m", "5m", "10m", "15m", "30m", "1h", "2h", "4h", "1d", "1w", "1M"}
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+from _manifest import (  # noqa: E402
+    VALID_TFS,
+    rebuild_manifest as _rebuild_manifest,
+    tf_to_filename_suffix,
+)
 
 
 def import_csv(src: pathlib.Path, market: str, symbol: str, timeframe: str,
@@ -49,7 +54,7 @@ def import_csv(src: pathlib.Path, market: str, symbol: str, timeframe: str,
 
     dst_dir = MARKETS_DIR / market
     dst_dir.mkdir(parents=True, exist_ok=True)
-    dst = dst_dir / f"{symbol}_{timeframe}.csv"
+    dst = dst_dir / f"{symbol}_{tf_to_filename_suffix(timeframe)}.csv"
 
     if dst.exists() and dst.resolve() == src.resolve():
         # already in place
@@ -74,40 +79,7 @@ def import_csv(src: pathlib.Path, market: str, symbol: str, timeframe: str,
 
 
 def rebuild_manifest() -> None:
-    sources: list[dict] = []
-    if MARKETS_DIR.exists():
-        for csv in sorted(MARKETS_DIR.rglob("*.csv")):
-            stem = csv.stem
-            if "_" not in stem:
-                continue
-            symbol, _, tf = stem.rpartition("_")
-            if tf not in VALID_TFS:
-                continue
-            market = csv.parent.name
-            entry = {
-                "market": market,
-                "symbol": symbol,
-                "timeframe": tf,
-                "url": "/" + csv.relative_to(REPO_ROOT / "public").as_posix(),
-            }
-            meta_file = csv.parent / f"{symbol}.meta.json"
-            if meta_file.exists():
-                try:
-                    meta = json.loads(meta_file.read_text())
-                    if meta.get("exchange"):    entry["exchange"] = meta["exchange"]
-                    if meta.get("description"): entry["description"] = meta["description"]
-                except json.JSONDecodeError:
-                    pass
-            sources.append(entry)
-
-    manifest = {
-        "version": 1,
-        "generatedAt": datetime.now(tz=timezone.utc).isoformat(),
-        "sources": sources,
-    }
-    MARKETS_DIR.mkdir(parents=True, exist_ok=True)
-    MANIFEST_PATH.write_text(json.dumps(manifest, indent=2))
-    print(f"manifest.json rebuilt · {len(sources)} series")
+    _rebuild_manifest(MARKETS_DIR, repo_root=REPO_ROOT)
 
 
 def parse_args() -> argparse.Namespace:

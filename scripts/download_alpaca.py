@@ -78,8 +78,13 @@ from typing import Iterable
 REPO_ROOT = pathlib.Path(__file__).resolve().parent.parent
 MARKETS_DIR = REPO_ROOT / "public" / "data" / "markets"
 US_EQUITY_DIR = MARKETS_DIR / "us_equity"
+
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+from _manifest import (  # noqa: E402
+    rebuild_manifest as _shared_rebuild_manifest,
+    tf_to_filename_suffix as _tf_to_filename_suffix,
+)
 CRYPTO_DIR    = MARKETS_DIR / "crypto"
-MANIFEST_PATH = MARKETS_DIR / "manifest.json"
 
 SP500_URL = "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies"
 
@@ -211,7 +216,7 @@ def write_symbol_csv(dst_dir: pathlib.Path, symbol: str, timeframe: str, df) -> 
     """
     dst_dir.mkdir(parents=True, exist_ok=True)
     file_symbol = _safe_filename(symbol)
-    dst = dst_dir / f"{file_symbol}_{timeframe}.csv"
+    dst = dst_dir / f"{file_symbol}_{_tf_to_filename_suffix(timeframe)}.csv"
 
     # Slice the DF for this symbol only.
     if symbol in df.index.get_level_values(0):
@@ -236,30 +241,7 @@ def write_symbol_csv(dst_dir: pathlib.Path, symbol: str, timeframe: str, df) -> 
 # ── Manifest rebuild ───────────────────────────────────────────────────────
 
 def rebuild_manifest() -> None:
-    sources: list[dict] = []
-    if MARKETS_DIR.exists():
-        for csv_path in sorted(MARKETS_DIR.rglob("*.csv")):
-            stem = csv_path.stem
-            if "_" not in stem:
-                continue
-            symbol, _, tf = stem.rpartition("_")
-            if tf not in VALID_TFS and tf not in {"10m", "30m", "2h"}:
-                continue
-            market = csv_path.parent.name
-            sources.append({
-                "market": market,
-                "symbol": symbol,
-                "timeframe": tf,
-                "url": "/" + csv_path.relative_to(REPO_ROOT / "public").as_posix(),
-            })
-    manifest = {
-        "version": 1,
-        "generatedAt": datetime.now(tz=timezone.utc).isoformat(),
-        "sources": sources,
-    }
-    MARKETS_DIR.mkdir(parents=True, exist_ok=True)
-    MANIFEST_PATH.write_text(json.dumps(manifest, indent=2))
-    print(f"[manifest] rebuilt · {len(sources)} series")
+    _shared_rebuild_manifest(MARKETS_DIR, repo_root=REPO_ROOT)
 
 
 # ── Main fetch loop ────────────────────────────────────────────────────────
