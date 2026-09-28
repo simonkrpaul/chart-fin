@@ -20,6 +20,32 @@ from datetime import datetime, timezone
 
 VALID_TFS = {"1m", "5m", "10m", "15m", "30m", "1h", "2h", "4h", "1d", "1w", "1M"}
 
+# Filename suffix ↔ TF mapping.
+#
+# macOS APFS and Windows NTFS are case-insensitive by default, so writing
+# both `<SYM>_1m.csv` and `<SYM>_1M.csv` into the same directory silently
+# collapses them into the same file. We work around this by using `1mo`
+# on disk for the monthly timeframe, while keeping the app-side `Timeframe`
+# type unchanged as `'1M'`. The manifest still emits `"timeframe": "1M"`
+# — only the URL points at `<SYM>_1mo.csv`.
+_FILENAME_SUFFIX_TO_TF = {
+    "1m": "1m", "5m": "5m", "10m": "10m", "15m": "15m", "30m": "30m",
+    "1h": "1h", "2h": "2h", "4h": "4h",
+    "1d": "1d", "1w": "1w",
+    "1mo": "1M",  # case-safe monthly suffix
+    # `1M` is intentionally NOT accepted here — see `rebuild_manifest`
+    # for the legacy warning path.
+}
+
+
+def tf_to_filename_suffix(tf: str) -> str:
+    """Return the on-disk filename suffix for a chart-fin TF code.
+
+    Use this when constructing `<SYMBOL>_<suffix>.csv` in any importer /
+    downloader so monthly bars land in a case-safe filename.
+    """
+    return "1mo" if tf == "1M" else tf
+
 
 def rebuild_manifest(
     markets_dir: pathlib.Path,
@@ -34,17 +60,30 @@ def rebuild_manifest(
     """
     manifest_path = markets_dir / "manifest.json"
     if repo_root is None:
-        repo_root = markets_dir.parent.parent  # public/ → repo root
+        # markets_dir = <repo>/public/data/markets → three .parent hops
+        # get us back to the repo root.
+        repo_root = markets_dir.parent.parent.parent
 
     sources: list[dict] = []
+    legacy_1M_files: list[pathlib.Path] = []
     if markets_dir.exists():
         for csv_path in sorted(markets_dir.rglob("*.csv")):
             stem = csv_path.stem
             if "_" not in stem:
                 continue
-            symbol, _, tf = stem.rpartition("_")
-            if tf not in VALID_TFS:
-                continue
+            symbol, _, suffix = stem.rpartition("_")
+
+            # Legacy filename detection: `_1M.csv` collides with `_1m.csv`
+            # on case-insensitive filesystems (macOS APFS, Windows NTFS).
+            # We accept it for backward compatibility but warn.
+            if suffix == "1M":
+                legacy_1M_files.append(csv_path)
+                tf = "1M"
+            else:
+                tf = _FILENAME_SUFFIX_TO_TF.get(suffix)
+                if tf is None:
+                    continue
+
             market = csv_path.parent.name
             entry: dict = {
                 "market": market,
@@ -73,4 +112,14 @@ def rebuild_manifest(
     manifest_path.write_text(json.dumps(manifest, indent=2))
     if not quiet:
         print(f"[manifest] rebuilt · {len(sources)} series · {manifest_path.relative_to(repo_root)}")
+        if legacy_1M_files:
+            print(
+                f"[manifest] warning: {len(legacy_1M_files)} legacy '_1M.csv' file(s) "
+                "still on disk. Rename to '_1mo.csv' — on case-insensitive "
+                "filesystems they collide with '_1m.csv':"
+            )
+            for p in legacy_1M_files[:5]:
+                print(f"           - {p.relative_to(repo_root)}")
+            if len(legacy_1M_files) > 5:
+                print(f"           …and {len(legacy_1M_files) - 5} more.")
     return manifest_path
