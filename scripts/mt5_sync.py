@@ -70,6 +70,7 @@ import pathlib
 import sys
 import time
 from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parent.parent
 MARKETS_ROOT = REPO_ROOT / "public" / "data" / "markets"
@@ -137,6 +138,36 @@ def _connect(args) -> None:
         print(f"[mt5_sync] connected to {info.server}  account={info.login}  currency={info.currency}")
 
 
+def _log_broker_offset(mt5_symbol: str, tz_name: str) -> None:
+    """Compare our --broker-tz assumption with MT5's actual server clock and
+    warn if they disagree by more than an hour. Uses the current tick time
+    (or a recent 1m bar) as the reference."""
+    mt5 = _load_mt5()
+    tick = mt5.symbol_info_tick(mt5_symbol)
+    server_epoch = int(tick.time) if tick else None
+    if not server_epoch:
+        # Fall back to the most recent 1m bar's time.
+        rates = mt5.copy_rates_from_pos(mt5_symbol, mt5.TIMEFRAME_M1, 0, 1)
+        if rates is not None and len(rates) > 0:
+            server_epoch = int(rates[0]["time"])
+    if not server_epoch:
+        return
+
+    now_utc_epoch = int(time.time())
+    actual_offset_hours = round((server_epoch - now_utc_epoch) / 3600)
+
+    tz = ZoneInfo(tz_name)
+    assumed_offset = datetime.now(tz).utcoffset()
+    assumed_hours = int(assumed_offset.total_seconds() / 3600) if assumed_offset else 0
+
+    tag = "✓" if actual_offset_hours == assumed_hours else "⚠"
+    print(f"[mt5_sync] {tag} broker clock offset: MT5 reports UTC{actual_offset_hours:+d}h, "
+          f"--broker-tz {tz_name} = UTC{assumed_hours:+d}h")
+    if actual_offset_hours != assumed_hours:
+        print(f"[mt5_sync]   Timestamps will be off by {actual_offset_hours - assumed_hours}h. "
+              f"Fix with --broker-tz Etc/GMT{-actual_offset_hours:+d} for a fixed offset.")
+
+
 def _resolve_symbol(preferred: str) -> str:
     """Return the actual broker-side symbol name. Tries a few common suffixes."""
     mt5 = _load_mt5()
@@ -165,27 +196,40 @@ def _fetch_bars(
     mt5_symbol: str,
     tf_code: str,
     bar_count: int,
+    broker_tz: ZoneInfo,
     from_ts_ms: int | None = None,
 ) -> list[tuple[int, float, float, float, float, float]]:
-    """Fetch OHLC bars from MT5.
+    """Fetch OHLC bars from MT5, converting broker-local bar times to UTC.
 
-    • from_ts_ms=None  → last `bar_count` bars from now (default, initial sync).
+    MT5 returns bar `time` as broker-server local time, encoded as Unix-epoch
+    seconds (a quirk of the API). For a Pepperstone MT5 server on Athens time
+    that means UTC+2 in winter / UTC+3 in summer. Left uncorrected, bars
+    land 2-3 hours ahead of the same wallclock candle in a UTC-sourced feed
+    (evtradelabs / Kaggle), which causes the "overlap" the user sees when
+    seeding from those files.
+
+    • from_ts_ms=None  → last `bar_count` bars from now (initial sync).
     • from_ts_ms=N     → every bar from N through now, capped at `bar_count`.
+      N is UTC; it's converted to broker-local for the MT5 call.
     """
     mt5 = _load_mt5()
     tf_const = _tf_map(mt5)[tf_code]
     if from_ts_ms is None:
         rates = mt5.copy_rates_from_pos(mt5_symbol, tf_const, 0, bar_count)
     else:
-        rates = mt5.copy_rates_from(mt5_symbol, tf_const,
-                                    datetime.fromtimestamp(from_ts_ms / 1000, tz=timezone.utc),
-                                    bar_count)
+        utc_dt = datetime.fromtimestamp(from_ts_ms / 1000, tz=timezone.utc)
+        broker_naive = utc_dt.astimezone(broker_tz).replace(tzinfo=None)
+        rates = mt5.copy_rates_from(mt5_symbol, tf_const, broker_naive, bar_count)
     if rates is None or len(rates) == 0:
         print(f"[mt5_sync]   {tf_code:>4}  no bars returned ({mt5.last_error()})", file=sys.stderr)
         return []
     out: list[tuple[int, float, float, float, float, float]] = []
     for r in rates:
-        ts_ms = int(r["time"]) * 1000
+        # Reinterpret the "epoch seconds" value as a naive broker-local
+        # datetime, attach broker_tz, convert to true UTC.
+        broker_naive = datetime.utcfromtimestamp(int(r["time"]))
+        aware_broker = broker_naive.replace(tzinfo=broker_tz)
+        ts_ms = int(aware_broker.astimezone(timezone.utc).timestamp() * 1000)
         # tick_volume for FX; real_volume is often 0 on demo accounts.
         v = float(r["tick_volume"] or r.get("real_volume", 0) or 0)
         out.append((ts_ms, float(r["open"]), float(r["high"]), float(r["low"]), float(r["close"]), v))
@@ -242,7 +286,7 @@ def _merge_into_csv(
 _TF_MINUTES = {"1m": 1, "5m": 5, "15m": 15, "1h": 60, "4h": 240, "1d": 1440, "1w": 10080, "1M": 43200}
 
 
-def _one_cycle(args, mt5_symbol: str) -> None:
+def _one_cycle(args, mt5_symbol: str, broker_tz: ZoneInfo) -> None:
     now_utc = datetime.now(tz=timezone.utc)
     print(f"\n[mt5_sync] cycle @ {now_utc.isoformat(timespec='seconds')}")
     now_ms = int(now_utc.timestamp() * 1000)
@@ -256,7 +300,7 @@ def _one_cycle(args, mt5_symbol: str) -> None:
         #   • gap > `--bars` × TF minutes   → gap-fill from last_ts, capped at --max-backfill
         #   • small / no gap                → last `--bars` bars from now (cheap keep-alive)
         if last_ts is None or args.full_refresh:
-            bars = _fetch_bars(mt5_symbol, tf, args.bars)
+            bars = _fetch_bars(mt5_symbol, tf, args.bars, broker_tz)
             mode = "tail"
         else:
             gap_min = (now_ms - last_ts) / 60_000
@@ -264,10 +308,10 @@ def _one_cycle(args, mt5_symbol: str) -> None:
             if expected_bars > args.bars:
                 # Overlap the last kept bar by one interval so nothing slips through.
                 from_ts = last_ts - _TF_MINUTES[tf] * 60_000
-                bars = _fetch_bars(mt5_symbol, tf, args.max_backfill, from_ts_ms=from_ts)
+                bars = _fetch_bars(mt5_symbol, tf, args.max_backfill, broker_tz, from_ts_ms=from_ts)
                 mode = f"gap-fill ~{expected_bars:.0f}"
             else:
-                bars = _fetch_bars(mt5_symbol, tf, args.bars)
+                bars = _fetch_bars(mt5_symbol, tf, args.bars, broker_tz)
                 mode = "tail"
 
         if not bars:
@@ -276,8 +320,8 @@ def _one_cycle(args, mt5_symbol: str) -> None:
         print(f"  ✓ {tf:>4}  {mode:>18}  fetched={len(bars):>6}  existing={before:>9,}  new={appended:>6}  →  {path.name}")
         _update_meta_source(
             FOREX_DIR, args.symbol, tf,
-            exchange=f"MetaTrader5 live ({mt5_symbol})",
-            description="MT5 broker feed via mt5_sync.py",
+            exchange=f"MetaTrader5 live ({mt5_symbol}, tz={args.broker_tz})",
+            description="MT5 broker feed via mt5_sync.py, converted to UTC",
         )
     _rebuild_manifest(MARKETS_ROOT, repo_root=REPO_ROOT, quiet=True)
 
@@ -300,6 +344,11 @@ def main() -> int:
     p.add_argument("--full-refresh", action="store_true",
                    help="Ignore the CSV's last row and re-pull the last --bars bars for every TF. "
                         "Useful if you suspect corrupt/stale rows in the tail.")
+    p.add_argument("--broker-tz", default="Europe/Athens",
+                   help="IANA timezone of the MT5 broker's server clock. "
+                        "Pepperstone = Europe/Athens (EEST/EET, DST-aware). "
+                        "Fixed-offset examples: 'Etc/GMT-3' (=UTC+3), 'Etc/GMT-2' (=UTC+2). "
+                        "Bar timestamps are converted from this tz to UTC before writing.")
     p.add_argument("--loop", type=int, default=0, metavar="SECONDS",
                    help="Run forever, sleeping SECONDS between cycles. 0 = one-shot (default).")
     p.add_argument("--headless", action="store_true",
@@ -309,19 +358,28 @@ def main() -> int:
     p.add_argument("--password", default="")
     args = p.parse_args()
 
+    try:
+        broker_tz = ZoneInfo(args.broker_tz)
+    except Exception as e:
+        print(f"[mt5_sync] invalid --broker-tz {args.broker_tz!r}: {e}", file=sys.stderr)
+        return 2
+
     FOREX_DIR.mkdir(parents=True, exist_ok=True)
     _connect(args)
 
     mt5_symbol = _resolve_symbol(args.mt5_symbol)
 
+    # One-time sanity log: compare our broker_tz assumption vs MT5's server clock.
+    _log_broker_offset(mt5_symbol, args.broker_tz)
+
     try:
         if args.loop <= 0:
-            _one_cycle(args, mt5_symbol)
+            _one_cycle(args, mt5_symbol, broker_tz)
         else:
             print(f"[mt5_sync] loop mode: every {args.loop}s (Ctrl-C to stop)")
             while True:
                 try:
-                    _one_cycle(args, mt5_symbol)
+                    _one_cycle(args, mt5_symbol, broker_tz)
                 except Exception as e:  # keep the loop alive across transient errors
                     print(f"[mt5_sync] cycle error: {e}", file=sys.stderr)
                 time.sleep(args.loop)

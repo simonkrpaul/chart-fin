@@ -989,8 +989,57 @@ Or install [nssm](https://nssm.cc/) and register `python.exe scripts/mt5_sync.py
 | `--bars 2000` | Bars per TF per keep-alive cycle (small gaps). 2 000 covers the last few days at any intraday TF |
 | `--max-backfill 100000` | Hard cap when the file's last row is older than `--bars × TF minutes`. Whole gap gets pulled in a single request (up to this many bars) |
 | `--full-refresh` | Ignore the CSV's last row and re-pull the tail. Fixes suspected corrupt/stale rows |
+| `--broker-tz Europe/Athens` | Timezone of the broker's server clock (default). Bar timestamps are converted from this tz to UTC before writing. Pepperstone = Europe/Athens (DST-aware, UTC+2/+3). Use `Etc/GMT-3` for a fixed +3 offset |
 | `--loop 600` | Repeat every 600 s. `0` = one-shot (default) |
 | `--headless` | Log in from the script instead of attaching |
+
+### Broker timezone — why timestamps looked wrong
+
+MetaTrader 5 returns bar `time` as **broker-server local time** encoded as if it were Unix-epoch seconds. Pepperstone's server runs on Athens time (UTC+3 summer / UTC+2 winter). Without a conversion, every bar lands 2–3 hours **ahead** of the same wallclock candle in a UTC-sourced feed like evtradelabs or Kaggle — so seeded 5m / 15m / 1h / 4h files show ghost bars offset by that amount.
+
+`mt5_sync.py` now:
+
+1. Uses `--broker-tz` (default `Europe/Athens`) to reinterpret MT5's bar time as a naive broker-local datetime.
+2. Converts it to true UTC before saving. DST is handled automatically because Athens tz observes it.
+3. Also converts your CSV's UTC `last_ts` back to broker-local when passing it to `mt5.copy_rates_from(from_date, count)`, so the gap-fill path lines up with what MT5 expects on input.
+4. Prints a sanity line at startup comparing your `--broker-tz` against MT5's real server offset:
+
+```
+[mt5_sync] ✓ broker clock offset: MT5 reports UTC+3h, --broker-tz Europe/Athens = UTC+3h
+```
+
+If you see `⚠` and a mismatch, pass an explicit fixed offset:
+
+```powershell
+python scripts\mt5_sync.py --broker-tz Etc/GMT-3     # UTC+3 fixed
+python scripts\mt5_sync.py --broker-tz Etc/GMT-2     # UTC+2 fixed
+```
+
+Note the counterintuitive sign — POSIX-style `Etc/GMT-<n>` means `UTC+<n>`. (Blame the POSIX spec, not me.)
+
+### If your seeded CSV has already-shifted bars
+
+If you seeded from evtradelabs (UTC) and then ran an earlier `mt5_sync.py` without the tz fix, your intraday CSVs now contain **both** a set of UTC-aligned rows (from the seed) **and** a set of +3h-shifted rows (from MT5). The by-timestamp merge kept them all, so you have roughly 2× the intended row count in the affected span.
+
+To recover cleanly on Windows:
+
+```powershell
+# 1. Wipe the corrupted MT5 CSVs (keeps 1m if you never seeded it)
+foreach ($tf in @('5m','15m','1h','4h','1d','1w','1mo')) {
+  Remove-Item "public\data\markets\forex\XAUUSD_MT5_${tf}.csv" -ErrorAction SilentlyContinue
+}
+
+# 2. Re-seed intraday TFs (5m/15m/1h/4h/1d) from evtradelabs; skip 1w/1M — see caveat above
+foreach ($tf in @('5m','15m','1h','4h','1d')) {
+  Copy-Item "public\data\markets\forex\XAUUSD_EVTL_${tf}.csv" `
+            "public\data\markets\forex\XAUUSD_MT5_${tf}.csv"
+}
+
+# 3. Now run the fixed sync — bars appended will be UTC, matching the seed
+python scripts\mt5_sync.py --mt5-symbol XAUUSD.a --tf 5m 15m 1h 4h 1d 1w 1M
+```
+
+The startup log should print `✓ broker clock offset: MT5 reports UTC+3h, --broker-tz Europe/Athens = UTC+3h` and the per-TF `new=` counts should drop to just the bars past the seed's last timestamp (dozens, not thousands).
 
 ### How gap-filling works
 

@@ -722,43 +722,10 @@ export function createChartStore(panelId: string = 'p1'): StoreApi<ChartState & 
 
     setTimezone: (tz) => {
       set(state => { state.session = { ...state.session, timezone: tz }; });
-      // Re-generate chart with updated timezone – same direct approach as setTimeframe.
+      // Re-run the full pipeline so generateSlots / _applyGapVisibility pick up
+      // the new tz and weekend spacers stay put in calendar-day mode.
       const s = get();
-      const base = s.baseCandles.length > 0 ? s.baseCandles : s.rawCandles;
-      const baseTf = s.baseTimeframe ?? s.timeframe;
-      if (base.length === 0) return;
-      const filteredBase = filterBySessionHours(base, s.session, baseTf);
-      let source: RawCandle[];
-      if (canResample(baseTf, s.timeframe)) {
-        source = resampleCandles(filteredBase, s.timeframe);
-      } else {
-        source = filteredBase;
-      }
-      const sorted = [...source].sort((a, b) => a.timestamp - b.timestamp);
-      const normalized: CandleSlot[] = sorted.map((candle, i) => ({
-        slotIndex: i,
-        timestamp: candle.timestamp,
-        status: 'trading' as const,
-        candle,
-      }));
-      const visibleCount = Math.min(200, normalized.length);
-      set(state => {
-        state.rawCandles = source;
-        state.primarySlots = normalized;
-        state.viewport.firstSlotIndex = Math.max(0, normalized.length - visibleCount);
-        state.viewport.visibleSlotCount = visibleCount;
-      });
-      get().recomputeAllIndicators();
-      const configs = get().overlayConfigs;
-      for (const cfg of configs) {
-        const cs = get();
-        const resolvedHist = _resolveOverlayHistoricalCandles(cs, cfg, cs.historicalCandlesByOverlay[cfg.id] ?? []);
-        set(state => {
-          state.overlays[cfg.id] = buildOffsetOverlay(state.primarySlots, cfg, resolvedHist, state.session, state.timeframe);
-          state.historicalCandlesByOverlay[cfg.id] = resolvedHist;
-        });
-      }
-      _autoFitPriceScale(set, get);
+      if (s.baseCandles.length > 0) get().setTimeframe(s.timeframe);
     },
 
     loadCandles: (raw, startMs, endMs, _preserveBase = false) => {
