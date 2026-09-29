@@ -161,10 +161,25 @@ def _resolve_symbol(preferred: str) -> str:
     sys.exit(2)
 
 
-def _fetch_bars(mt5_symbol: str, tf_code: str, bar_count: int) -> list[tuple[int, float, float, float, float, float]]:
+def _fetch_bars(
+    mt5_symbol: str,
+    tf_code: str,
+    bar_count: int,
+    from_ts_ms: int | None = None,
+) -> list[tuple[int, float, float, float, float, float]]:
+    """Fetch OHLC bars from MT5.
+
+    • from_ts_ms=None  → last `bar_count` bars from now (default, initial sync).
+    • from_ts_ms=N     → every bar from N through now, capped at `bar_count`.
+    """
     mt5 = _load_mt5()
     tf_const = _tf_map(mt5)[tf_code]
-    rates = mt5.copy_rates_from_pos(mt5_symbol, tf_const, 0, bar_count)
+    if from_ts_ms is None:
+        rates = mt5.copy_rates_from_pos(mt5_symbol, tf_const, 0, bar_count)
+    else:
+        rates = mt5.copy_rates_from(mt5_symbol, tf_const,
+                                    datetime.fromtimestamp(from_ts_ms / 1000, tz=timezone.utc),
+                                    bar_count)
     if rates is None or len(rates) == 0:
         print(f"[mt5_sync]   {tf_code:>4}  no bars returned ({mt5.last_error()})", file=sys.stderr)
         return []
@@ -175,6 +190,23 @@ def _fetch_bars(mt5_symbol: str, tf_code: str, bar_count: int) -> list[tuple[int
         v = float(r["tick_volume"] or r.get("real_volume", 0) or 0)
         out.append((ts_ms, float(r["open"]), float(r["high"]), float(r["low"]), float(r["close"]), v))
     return out
+
+
+def _last_ts_in_csv(path: pathlib.Path) -> int | None:
+    """Return the last row's timestamp (Unix ms), or None if the file is empty."""
+    if not path.exists():
+        return None
+    last_ts: int | None = None
+    with path.open("r", encoding="utf-8", newline="") as fh:
+        r = csv.reader(fh); next(r, None)
+        for row in r:
+            if not row:
+                continue
+            try:
+                last_ts = int(row[0])
+            except ValueError:
+                continue
+    return last_ts
 
 
 def _merge_into_csv(
@@ -206,16 +238,42 @@ def _merge_into_csv(
     return before, len(existing) - before
 
 
+# TF → minutes per bar. Used to size gap-fills.
+_TF_MINUTES = {"1m": 1, "5m": 5, "15m": 15, "1h": 60, "4h": 240, "1d": 1440, "1w": 10080, "1M": 43200}
+
+
 def _one_cycle(args, mt5_symbol: str) -> None:
-    now_utc = datetime.now(tz=timezone.utc).isoformat(timespec="seconds")
-    print(f"\n[mt5_sync] cycle @ {now_utc}")
+    now_utc = datetime.now(tz=timezone.utc)
+    print(f"\n[mt5_sync] cycle @ {now_utc.isoformat(timespec='seconds')}")
+    now_ms = int(now_utc.timestamp() * 1000)
+
     for tf in args.tf:
-        bars = _fetch_bars(mt5_symbol, tf, args.bars)
+        path = FOREX_DIR / f"{args.symbol}_{_tf_suffix(tf)}.csv"
+        last_ts = _last_ts_in_csv(path)
+
+        # Decide how to fetch:
+        #   • empty file / --full-refresh   → last `--bars` bars from now
+        #   • gap > `--bars` × TF minutes   → gap-fill from last_ts, capped at --max-backfill
+        #   • small / no gap                → last `--bars` bars from now (cheap keep-alive)
+        if last_ts is None or args.full_refresh:
+            bars = _fetch_bars(mt5_symbol, tf, args.bars)
+            mode = "tail"
+        else:
+            gap_min = (now_ms - last_ts) / 60_000
+            expected_bars = gap_min / _TF_MINUTES[tf]
+            if expected_bars > args.bars:
+                # Overlap the last kept bar by one interval so nothing slips through.
+                from_ts = last_ts - _TF_MINUTES[tf] * 60_000
+                bars = _fetch_bars(mt5_symbol, tf, args.max_backfill, from_ts_ms=from_ts)
+                mode = f"gap-fill ~{expected_bars:.0f}"
+            else:
+                bars = _fetch_bars(mt5_symbol, tf, args.bars)
+                mode = "tail"
+
         if not bars:
             continue
-        path = FOREX_DIR / f"{args.symbol}_{_tf_suffix(tf)}.csv"
         before, appended = _merge_into_csv(path, bars)
-        print(f"  ✓ {tf:>4}  fetched={len(bars):>5}  existing={before:>8,}  new={appended:>5}  →  {path.name}")
+        print(f"  ✓ {tf:>4}  {mode:>18}  fetched={len(bars):>6}  existing={before:>9,}  new={appended:>6}  →  {path.name}")
         _update_meta_source(
             FOREX_DIR, args.symbol, tf,
             exchange=f"MetaTrader5 live ({mt5_symbol})",
@@ -235,7 +293,13 @@ def main() -> int:
     p.add_argument("--tf", nargs="+", default=TF_ALL, choices=TF_ALL,
                    help="Timeframes to fetch each cycle.")
     p.add_argument("--bars", type=int, default=2000,
-                   help="Bars-per-cycle to fetch per TF (MT5 caps at ~100k).")
+                   help="Bars-per-cycle to fetch per TF for keep-alive (small-gap) cycles.")
+    p.add_argument("--max-backfill", type=int, default=100_000,
+                   help="Hard cap for a gap-fill fetch when the CSV's tail is older than "
+                        "--bars * TF minutes. MT5 usually accepts ~100k bars per request.")
+    p.add_argument("--full-refresh", action="store_true",
+                   help="Ignore the CSV's last row and re-pull the last --bars bars for every TF. "
+                        "Useful if you suspect corrupt/stale rows in the tail.")
     p.add_argument("--loop", type=int, default=0, metavar="SECONDS",
                    help="Run forever, sleeping SECONDS between cycles. 0 = one-shot (default).")
     p.add_argument("--headless", action="store_true",

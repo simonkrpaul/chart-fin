@@ -984,11 +984,28 @@ Or install [nssm](https://nssm.cc/) and register `python.exe scripts/mt5_sync.py
 | Flag | Purpose |
 | --- | --- |
 | `--symbol XAUUSD_MT5` | chart-fin symbol name for output. Keep DIFFERENT from other XAUUSD sources |
-| `--mt5-symbol XAUUSD` | Broker-side symbol. Auto-tries `.raw` / `.i` / `GOLD` if the plain name isn't found |
+| `--mt5-symbol XAUUSD` | Broker-side symbol. Auto-tries `.a` / `.raw` / `.i` / `GOLD` if the plain name isn't found |
 | `--tf 5m 15m 1h` | Restrict to specific TFs (default: all 8) |
-| `--bars 2000` | Bars per TF per cycle. MT5 caps around 100 k; 2 000 is plenty for a 10 min loop |
+| `--bars 2000` | Bars per TF per keep-alive cycle (small gaps). 2 000 covers the last few days at any intraday TF |
+| `--max-backfill 100000` | Hard cap when the file's last row is older than `--bars × TF minutes`. Whole gap gets pulled in a single request (up to this many bars) |
+| `--full-refresh` | Ignore the CSV's last row and re-pull the tail. Fixes suspected corrupt/stale rows |
 | `--loop 600` | Repeat every 600 s. `0` = one-shot (default) |
 | `--headless` | Log in from the script instead of attaching |
+
+### How gap-filling works
+
+Each cycle, per TF, the script:
+
+1. Reads the last timestamp in `XAUUSD_MT5_<tf>.csv`.
+2. Computes how many bars would have appeared since then at the current TF (`now − last_ts` ÷ TF minutes).
+3. **Small gap** (≤ `--bars`): fetches the last `--bars` bars from now (fast keep-alive path).
+4. **Large gap** (> `--bars`): switches to a range fetch from the last saved bar through now, capped at `--max-backfill`. One MT5 call, no manual re-runs.
+
+Practical implications:
+
+- If your Windows box was offline for a week and you restart the loop, the first cycle will backfill the whole week per TF (well within the 100 k cap even for 1 m).
+- If you seeded from evtradelabs (Sep 20 2026) and MT5 has bars through today (Sep 29 2026), the first cycle detects the ~9-day gap and pulls every 5 m / 15 m / 1 h / … bar in between — no manual patching needed.
+- **Empty file** or `--full-refresh`: reverts to the fixed `--bars` tail fetch (default: 2 000).
 
 ### Pepperstone symbol names
 
