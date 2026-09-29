@@ -53,6 +53,9 @@ manifest without closing/reopening.
 | [download_kaggle_btc.py](../scripts/download_kaggle_btc.py) | Kaggle `mczielinski/bitcoin-historical-data` | `crypto` | Bitcoin 1m history (~10 years) resampled to full TF ladder |
 | [bybit_sync.py](../scripts/bybit_sync.py) | Bybit v5 public REST | `crypto` | Any pair; 1m + resampled to `1w`. Incremental gap-only re-runs |
 | [import_kaggle_sp500.py](../scripts/import_kaggle_sp500.py) | Local Kaggle master CSV | `us_equity` | Splits ~500 symbols into per-symbol daily CSVs |
+| [import_kaggle_xauusd.py](../scripts/import_kaggle_xauusd.py) | Kaggle XAUUSD Metatrader dump | `forex` | Gold 1m/5m/15m/1h/4h/1d/1w/1M from a semicolon+dotted-date archive |
+| [import_xauusd_iso.py](../scripts/import_xauusd_iso.py) | ISO-timestamp 1m CSV (any provider) | `forex` | Gold 1m + all resampled TFs; supports **merge** with existing 1m history |
+| [import_evtradelabs_xauusd.py](../scripts/import_evtradelabs_xauusd.py) | [evtradelabs.com](https://evtradelabs.com/) XAUUSD JSON archive | `forex` | Gold 5m bid/ask/mid (23 years, per-year JSON files) |
 | [import_market.py](../scripts/import_market.py) | Any CSV file | any | Generic promoter — moves an existing CSV into the market layout |
 | [mock_alpaca.py](../scripts/mock_alpaca.py) | Synthetic (Alpaca schema) | `us_equity` | 1-min OHLCV, NYSE session hours, no network needed |
 | [mock_data.py](../scripts/mock_data.py) | Synthetic | 4 profiles | Crypto / US equity / ASX / forex — deterministic random-walk |
@@ -749,3 +752,153 @@ done
 1. `pnpm dev` (or refresh).
 2. **📈 Open chart → ↻ Rescan disk**.
 3. Data is in the picker.
+
+---
+
+## 7. evtradelabs — XAUUSD 5-minute archive
+
+Handles the XAUUSD 5-minute dataset published by [evtradelabs.com](https://evtradelabs.com/) — one JSON file per calendar year with both bid **and** ask sides in a single record. Covers 2004 → present (~1.6 M rows, ~200 MB uncompressed).
+
+The importer writes to a **separate symbol** (default `XAUUSD_EVTL`) so its 5m ↔ 1d ladder stays fully self-consistent and never gets mixed with the Kaggle + ISO `XAUUSD` source. The picker shows the two symbols side-by-side under `forex`, and each timeframe carries its own provenance label (see [Section 8](#8-per-timeframe-provenance-in-metajson)).
+
+### Expected files
+
+Unzip `evtradelabs-data-YYYY-MM-DD.zip` anywhere; you should end up with:
+
+```
+<somewhere>/XAUUSD/M5/
+├── 2004.json
+├── 2005.json
+├── …
+└── 2026.json
+```
+
+Each file is a JSON array of records with **Unix-seconds** timestamps and both sides of the book:
+
+```json
+[
+  {
+    "ts": 1072915200,     // Unix seconds UTC
+    "o":  414.92, "h": 414.92, "l": 414.43, "c": 414.64,   // bid OHLC
+    "ao": 415.33, "ah": 415.33, "al": 414.92, "ac": 415.15, // ask OHLC
+    "v":  0.01801                                          // volume (lots)
+  }
+]
+```
+
+### Run
+
+```bash
+# Default: import as XAUUSD_EVTL (mid price) + full resampled ladder
+python3.12 scripts/import_evtradelabs_xauusd.py "~/Downloads/evtradelabs-xauusd/XAUUSD/M5"
+
+# Use bid or ask instead of mid (default)
+python3.12 scripts/import_evtradelabs_xauusd.py <dir> --price bid
+python3.12 scripts/import_evtradelabs_xauusd.py <dir> --price ask
+
+# Merge with existing XAUUSD_EVTL_5m.csv (union timestamps; new wins on collision)
+python3.12 scripts/import_evtradelabs_xauusd.py <dir> --mode merge
+
+# Store under a custom symbol (e.g. keep both mid and ask side-by-side)
+python3.12 scripts/import_evtradelabs_xauusd.py <dir> --symbol XAUUSD_EVTL_ASK --price ask
+```
+
+### What happens
+
+- Reads every `YYYY.json` file under the source dir.
+- Converts Unix seconds → Unix milliseconds; **mid** = `(bid + ask) / 2` for each of `o/h/l/c` (unless `--price bid|ask`).
+- Writes canonical `public/data/markets/forex/<SYMBOL>_5m.csv`.
+- **Resamples the 5m stream in a single in-memory pass** to `15m / 1h / 4h / 1d / 1w / 1mo` — one file per TF, so the whole `<SYMBOL>` ladder shares a single source.
+- Updates `<SYMBOL>.meta.json` with per-TF `sources[]` entries — the 5m row is tagged `evtradelabs XAUUSD (<price> price)`, everything else is tagged `evtradelabs XAUUSD (<price>), resampled from 5m`.
+- Rebuilds `public/data/markets/manifest.json` via the shared `_manifest.py` helper.
+- Does **not** touch any other symbol's files.
+
+Typical run: **≈ 15 seconds** for the full 23 years, ~1.6 M rows + full ladder.
+
+### Two-symbol layout — why the `_EVTL` suffix?
+
+Prior to this split the evtradelabs 5m file was written to the shared `XAUUSD_5m.csv`, next to Kaggle+ISO-derived `XAUUSD_1m/15m/1h/4h/1d/…`. Selecting `5m` gave you evtradelabs mid; switching to `1d` silently jumped to a differently-priced source (Kaggle bid-ish, different timestamps). Signals looked inconsistent.
+
+The `XAUUSD_EVTL` split fixes that:
+
+```
+forex/
+├── XAUUSD_1m.csv          ← Kaggle + ISO merged
+├── XAUUSD_5m.csv          ← resampled from 1m (Kaggle+ISO)
+├── XAUUSD_15m … XAUUSD_1mo.csv   ← resampled from 1m
+├── XAUUSD.meta.json
+├── XAUUSD_EVTL_5m.csv     ← evtradelabs mid
+├── XAUUSD_EVTL_15m … XAUUSD_EVTL_1mo.csv   ← resampled from 5m
+└── XAUUSD_EVTL.meta.json
+```
+
+The picker groups by symbol, so you see two separate entries under `forex`. Each row of the timeframe dropdown carries its own source label (see below).
+
+### Data-quality expectations
+
+- Timestamps aligned to the 5-minute grid (no drift).
+- ~99 % strict 5-minute cadence; remaining gaps are weekend / holiday windows (~54 per year).
+- OHLC always internally consistent (`H ≥ max(O,C)`, `L ≤ min(O,C)`).
+- Coverage stretches through **September 2026** — currently the freshest XAUUSD source we have wired up.
+
+### After the run
+
+1. `pnpm dev` (or refresh the tab).
+2. **📈 Open chart → ↻ Rescan disk**.
+3. Under `forex` you now see both `XAUUSD` and `XAUUSD_EVTL`. Pick either; every TF inside that symbol stays inside that source.
+
+---
+
+## 8. Per-timeframe provenance in meta.json
+
+Every `<symbol>.meta.json` now supports a `sources` map so a single meta file can advertise different sources for different timeframes without one importer clobbering another's entries.
+
+Schema:
+
+```json
+{
+  "sources": {
+    "1m":  { "exchange": "Kaggle + ISO 1m merged",       "description": "…" },
+    "5m":  { "exchange": "evtradelabs XAUUSD (mid)",     "description": "…" },
+    "15m": { "exchange": "resampled from 1m",            "description": "…" },
+    "1h":  { "exchange": "resampled from 1m",            "description": "…" }
+  },
+  "exchange":    "Kaggle + ISO 1m merged",
+  "description": "…"
+}
+```
+
+- `sources[<tf>]` wins per timeframe.
+- Top-level `exchange` / `description` are the fallback for TFs not listed under `sources`.
+
+Every importer writes its rows via the shared helper:
+
+```python
+from _manifest import update_meta_source
+
+_update_meta_source(
+    market_dir,          # pathlib.Path to `public/data/markets/<market>/`
+    "XAUUSD",            # symbol
+    "5m",                # timeframe
+    exchange="evtradelabs XAUUSD (mid price)",
+    description="Gold (spot) vs USD — evtradelabs M5 archive",
+)
+```
+
+`update_meta_source` reads the existing meta file, merges the entry into `sources[<tf>]`, and writes it back — other TFs' entries and top-level fields are preserved.
+
+The [ChartPicker](../src/components/ChartPicker.tsx) reads the per-TF exchange back through `PickerSymbol.exchangeByTf` and renders it next to each option in the Timeframe dropdown, e.g.:
+
+```
+1m — Kaggle + ISO 1m merged
+5m — Kaggle + ISO, resampled from 1m
+15m — resampled from 1m
+```
+
+For `XAUUSD_EVTL`:
+
+```
+5m — evtradelabs XAUUSD (mid price)
+15m — evtradelabs XAUUSD (mid), resampled from 5m
+1d — evtradelabs XAUUSD (mid), resampled from 5m
+```

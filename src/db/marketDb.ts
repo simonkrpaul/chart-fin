@@ -327,6 +327,100 @@ async function _fetchCsvCandles(url: string): Promise<RawCandle[]> {
 }
 
 /**
+ * Stream a CSV and keep only the last `maxRows` candles. Prevents OOM on
+ * ~300 MB / 7 M-row files (XAUUSD 1m) when the caller only needs the tail.
+ * Assumes the canonical schema (`timestamp,open,high,low,close,volume`
+ * with Unix ms UTC timestamps). Falls back to a comma delimiter if the
+ * header uses a different one.
+ */
+async function _fetchCsvCandlesTail(url: string, maxRows: number): Promise<RawCandle[]> {
+  const resp = await fetch(url);
+  if (!resp.ok) throw new Error(`HTTP ${resp.status} fetching ${url}`);
+  if (!resp.body) {
+    // No streaming support — fall back to buffered parse and trim.
+    const all = await _fetchCsvCandles(url);
+    return all.slice(Math.max(0, all.length - maxRows));
+  }
+
+  const reader = resp.body.getReader();
+  const decoder = new TextDecoder();
+  const ring: (RawCandle | null)[] = new Array(maxRows).fill(null);
+  let head = 0;
+  let filled = 0;
+
+  let buf = '';
+  let headerParsed = false;
+  let delim = ',';
+  let tsCol = 0, oCol = 1, hCol = 2, lCol = 3, cCol = 4, vCol = 5;
+
+  const acceptLine = (line: string): void => {
+    if (!line) return;
+    if (!headerParsed) {
+      delim = line.includes('\t') ? '\t' : line.includes(';') ? ';' : ',';
+      const headers = line.split(delim).map(h => h.trim().toLowerCase());
+      const idx = (names: string[]) => {
+        for (const n of names) { const i = headers.indexOf(n); if (i !== -1) return i; }
+        return -1;
+      };
+      tsCol = idx(['timestamp','time','date','datetime','t','ts']);
+      oCol  = idx(['open','o']);
+      hCol  = idx(['high','h']);
+      lCol  = idx(['low','l']);
+      cCol  = idx(['close','c']);
+      vCol  = idx(['volume','vol','v']);
+      headerParsed = true;
+      return;
+    }
+    const cells = line.split(delim);
+    if (cells.length < 5) return;
+    const rawTs = cells[tsCol];
+    let ts: number;
+    if (/^\d+$/.test(rawTs)) {
+      ts = Number(rawTs);
+      if (ts < 1e12) ts *= 1000; // Unix seconds → ms
+    } else {
+      const parsed = Date.parse(rawTs);
+      if (isNaN(parsed)) return;
+      ts = parsed;
+    }
+    const open  = parseFloat(cells[oCol]);
+    const high  = parseFloat(cells[hCol]);
+    const low   = parseFloat(cells[lCol]);
+    const close = parseFloat(cells[cCol]);
+    if (isNaN(open) || isNaN(high) || isNaN(low) || isNaN(close)) return;
+    const volume = vCol >= 0 && cells[vCol] ? parseFloat(cells[vCol]) || 0 : 0;
+
+    ring[head] = { timestamp: ts, open, high, low, close, volume };
+    head = (head + 1) % maxRows;
+    if (filled < maxRows) filled++;
+  };
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buf += decoder.decode(value, { stream: true });
+    let idx = buf.indexOf('\n');
+    while (idx >= 0) {
+      const line = buf.slice(0, idx).replace(/\r$/, '');
+      if (line) acceptLine(line);
+      buf = buf.slice(idx + 1);
+      idx = buf.indexOf('\n');
+    }
+  }
+  // Flush any trailing partial line (last row without newline).
+  const last = buf.trim();
+  if (last) acceptLine(last);
+
+  // Materialize the ring in chronological order.
+  const out: RawCandle[] = new Array(filled);
+  const start = filled < maxRows ? 0 : head;
+  for (let i = 0; i < filled; i++) {
+    out[i] = ring[(start + i) % maxRows]!;
+  }
+  return out;
+}
+
+/**
  * Write freshly-parsed candles into IndexedDB in the background so the next
  * open of this series can use the fast DB path. Errors are swallowed —
  * writeback is best-effort and must never block the chart from opening.
@@ -432,9 +526,17 @@ export async function loadInitialCandles(
   // eslint-disable-next-line no-console
   console.info(`[loadInitialCandles] ${market}/${symbol}@${timeframe} — fetching CSV: ${picked.src.url} (source TF ${picked.tf})`);
 
+  // When the caller wants a bounded window we stream + tail-buffer the CSV
+  // so a 6-M-row / 300-MB file (XAUUSD 1m) doesn't blow the tab. Writeback
+  // is skipped in that case because we don't have the full history.
+  const sourceRatio = TIMEFRAME_MINUTES[timeframe] / TIMEFRAME_MINUTES[picked.tf];
+  const sourceMax = loadAll ? Infinity : Math.ceil(count * sourceRatio);
+
   let csvCandles: RawCandle[];
   try {
-    csvCandles = await _fetchCsvCandles(picked.src.url);
+    csvCandles = loadAll
+      ? await _fetchCsvCandles(picked.src.url)
+      : await _fetchCsvCandlesTail(picked.src.url, sourceMax);
   } catch (err) {
     // eslint-disable-next-line no-console
     console.error(`[loadInitialCandles] ${market}/${symbol}@${timeframe} — CSV fetch failed`, err);
@@ -446,14 +548,16 @@ export async function loadInitialCandles(
     return { candles: [], sourceTimeframe: picked.tf, resampled: false };
   }
   // eslint-disable-next-line no-console
-  console.info(`[loadInitialCandles] ${market}/${symbol}@${timeframe} — CSV OK: ${csvCandles.length} rows`);
+  console.info(`[loadInitialCandles] ${market}/${symbol}@${timeframe} — CSV OK: ${csvCandles.length} rows (${loadAll ? 'full' : 'tail'})`);
 
-  // Warm the cache for next time (fire-and-forget).
-  _writebackCandles(market, symbol, picked.tf, csvCandles, picked.src);
+  // Only warm the cache when we hold the full history — a partial tail
+  // would corrupt the IDB record.
+  if (loadAll) {
+    _writebackCandles(market, symbol, picked.tf, csvCandles, picked.src);
+  }
 
   const filtered = preset ? filterBySessionHours(csvCandles, preset.session, picked.tf) : csvCandles;
-  const trimmed = loadAll ? filtered : filtered.slice(Math.max(0, filtered.length - Math.ceil((count ?? INITIAL_BAR_COUNT) * (TIMEFRAME_MINUTES[timeframe] / TIMEFRAME_MINUTES[picked.tf]))));
-  const candles = picked.tf === timeframe ? trimmed : resampleCandles(trimmed, timeframe);
+  const candles = picked.tf === timeframe ? filtered : resampleCandles(filtered, timeframe);
   return { candles, sourceTimeframe: picked.tf, resampled: picked.tf !== timeframe };
 }
 
@@ -588,6 +692,12 @@ export interface PickerSymbol extends store.SymbolRecord {
    * correct CSV when the user selects a TF that isn't in availableTimeframes.
    */
   pendingByTf?: Partial<Record<Timeframe, string>>;
+  /**
+   * Per-timeframe provenance labels (from `meta.json.sources[tf].exchange`)
+   * so the picker can show e.g. `5m — evtradelabs (mid)` and distinguish
+   * multiple sources under one symbol.
+   */
+  exchangeByTf?: Partial<Record<Timeframe, string>>;
 }
 
 export interface PickerMarket {
@@ -658,6 +768,9 @@ export async function listMarketsForPicker(
         status: isFullyCached ? 'ready' : 'pending',
         manifestUrl: finest.url,
         pendingByTf: Object.fromEntries(entries.map(e => [e.timeframe, e.url])),
+        exchangeByTf: Object.fromEntries(
+          entries.filter(e => e.exchange).map(e => [e.timeframe, e.exchange!])
+        ),
       });
     }
   }

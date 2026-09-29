@@ -21,7 +21,59 @@ import {
 import { listLayoutsDb } from '../db/marketStore';
 import { openSeries, openLayout, setDefaultLayout, getDefaultLayoutId } from '../store/chartSession';
 import type { ChartLayout, Timeframe } from '../types';
+import { TIMEFRAME_MINUTES } from '../engine/calendarEngine';
 import { IngestionPanel } from './IngestionPanel';
+
+// History-depth options, days each. `null` = load everything the DB has.
+interface DepthOption { label: string; days: number | null; }
+const DEPTH_OPTIONS: DepthOption[] = [
+  { label: 'Last 1 month',  days: 30 },
+  { label: 'Last 3 months', days: 91 },
+  { label: 'Last 6 months', days: 182 },
+  { label: 'Last 1 year',   days: 365 },
+  { label: 'Last 2 years',  days: 730 },
+  { label: 'Last 3 years',  days: 1095 },
+  { label: 'Last 5 years',  days: 1826 },
+  { label: 'Last 7 years',  days: 2556 },
+  { label: 'Last 10 years', days: 3653 },
+  { label: 'Last 15 years', days: 5479 },
+  { label: 'Last 20 years', days: 7305 },
+  { label: 'All history',   days: null },
+];
+
+// Smart default depth per TF, chosen so first-open never blows past ~50k bars
+// even on high-frequency TFs (browser stays responsive under ~200k slots).
+const DEFAULT_DEPTH_DAYS: Record<Timeframe, number | null> = {
+  '1m':  30,
+  '5m':  91,
+  '10m': 182,
+  '15m': 365,
+  '1h':  1826,   // 5y
+  '4h':  3653,   // 10y
+  '1d':  null,   // all history
+  '1w':  null,
+  '1M':  null,
+};
+
+const LS_DEPTH_KEY = 'chartfin.picker.depthDaysByTf.v1';
+
+function readSavedDepth(): Partial<Record<Timeframe, number | null>> {
+  try {
+    const raw = localStorage.getItem(LS_DEPTH_KEY);
+    return raw ? JSON.parse(raw) : {};
+  } catch { return {}; }
+}
+
+function writeSavedDepth(map: Partial<Record<Timeframe, number | null>>): void {
+  try { localStorage.setItem(LS_DEPTH_KEY, JSON.stringify(map)); } catch { /* ignore */ }
+}
+
+// Convert (tf, days) → target bar count. `null` days means unlimited.
+function depthToBarCount(tf: Timeframe, days: number | null): number {
+  if (days === null) return Infinity;
+  const barsPerDay = (60 * 24) / TIMEFRAME_MINUTES[tf];
+  return Math.ceil(days * barsPerDay);
+}
 
 export const ChartPicker: React.FC = () => {
   const { theme } = useChartStore();
@@ -30,10 +82,10 @@ export const ChartPicker: React.FC = () => {
   const [markets, setMarkets]   = useState<PickerMarket[]>([]);
   const [layouts, setLayouts]   = useState<ChartLayout[]>([]);
   const [defaultId, setDefaultId] = useState<string | undefined>(undefined);
-  const [marketId, setMarketId] = useState<string>('crypto');
+  const [marketId, setMarketId] = useState<string>('forex');
   const [symbol, setSymbol]     = useState<string>('');
   const [tf, setTf]             = useState<Timeframe>('1d');
-  const [loadAll, setLoadAll]   = useState(false);
+  const [depthDays, setDepthDays] = useState<number | null>(null);
   const [status, setStatus]     = useState<string>('');
   const [busy, setBusy]         = useState(false);
 
@@ -106,24 +158,31 @@ export const ChartPicker: React.FC = () => {
     if (!tfOptions.includes(tf)) setTf(tfOptions[tfOptions.length - 1]);
   }, [tfOptions, tf]);
 
-  // Auto-toggle "Load entire history" based on TF: 25 years of daily bars
-  // is ~6 k rows and loads in <100 ms, so default to on. Minute/hour TFs
-  // can be millions of rows so default to off (last 2 000).
+  // History depth: per-TF smart default, overridable, persisted in localStorage.
   useEffect(() => {
-    const coarse = tf === '1d' || tf === '1w' || tf === '1M';
-    setLoadAll(coarse);
+    const saved = readSavedDepth();
+    const days = saved[tf] !== undefined ? saved[tf]! : DEFAULT_DEPTH_DAYS[tf];
+    setDepthDays(days);
   }, [tf]);
 
   const handleOpenSeries = useCallback(async () => {
     if (!symbol) { setStatus('No symbol selected'); return; }
+    // Persist the user's choice for this TF so next open reuses it.
+    const saved = readSavedDepth();
+    saved[tf] = depthDays;
+    writeSavedDepth(saved);
+
+    const targetBars = depthToBarCount(tf, depthDays);
     setBusy(true);
     const t0 = performance.now();
     try {
       // openSeries → loadInitialCandles will hit the IDB cache first and
       // fall back to fetching the CSV directly from the manifest URL if
       // the cache is empty. No manual pre-ingest needed.
-      setStatus(loadAll ? 'Loading everything…' : 'Loading…');
-      const res = await openSeries(marketId, symbol, tf, loadAll ? Infinity : 2000);
+      setStatus(depthDays === null
+        ? 'Loading full history…'
+        : `Loading last ${depthDays}d (~${targetBars.toLocaleString()} bars)…`);
+      const res = await openSeries(marketId, symbol, tf, targetBars);
       if (!res.ok) { setStatus(res.message ?? 'Failed'); setBusy(false); return; }
       const dt = (performance.now() - t0).toFixed(1);
       setStatus(`✓ ${res.rows.toLocaleString()} bars · ${dt} ms${res.resampled ? ` · resampled from ${res.sourceTimeframe}` : ''}`);
@@ -133,7 +192,7 @@ export const ChartPicker: React.FC = () => {
     } finally {
       setBusy(false);
     }
-  }, [marketId, symbol, tf, loadAll]);
+  }, [marketId, symbol, tf, depthDays]);
 
   const handleOpenLayout = useCallback(async (layout: ChartLayout) => {
     setBusy(true); setStatus(`Loading "${layout.name}"…`);
@@ -284,23 +343,58 @@ export const ChartPicker: React.FC = () => {
                   value={tf}
                   onChange={e => setTf(e.target.value as Timeframe)}
                   disabled={tfOptions.length === 0}
-                  style={{ ...btnStyle, width: '100%', marginBottom: 10 }}
+                  style={{ ...btnStyle, width: '100%', marginBottom: 4 }}
                 >
                   {tfOptions.map(o => {
                     const stored = (currentSymbolRecord?.availableTimeframes ?? []).includes(o);
-                    return <option key={o} value={o}>{o}{stored ? '' : ' (derived)'}</option>;
+                    const src = currentSymbolRecord?.exchangeByTf?.[o];
+                    const suffix = src ? ` — ${src}` : (stored ? '' : ' (derived)');
+                    return <option key={o} value={o}>{o}{suffix}</option>;
                   })}
                 </select>
+                {(() => {
+                  const src = currentSymbolRecord?.exchangeByTf?.[tf];
+                  return src ? (
+                    <div style={{ fontSize: 10, opacity: 0.65, marginBottom: 10 }}>
+                      source: {src}
+                    </div>
+                  ) : <div style={{ marginBottom: 10 }} />;
+                })()}
 
-                <label style={{ display: 'flex', gap: 6, alignItems: 'center', fontSize: 11, opacity: 0.9, marginBottom: 8, cursor: 'pointer' }}>
-                  <input type="checkbox" checked={loadAll} onChange={e => setLoadAll(e.target.checked)} />
-                  Load entire history
+                <label style={{ fontSize: 11, opacity: 0.7 }}>
+                  History depth
                   {currentSymbolRecord?.candleCount && (
-                    <span style={{ opacity: 0.6 }}>
-                      ({currentSymbolRecord.candleCount.toLocaleString()} bars)
+                    <span style={{ opacity: 0.55, marginLeft: 6 }}>
+                      · DB has {currentSymbolRecord.candleCount.toLocaleString()} {currentSymbolRecord.baseTimeframe} bars
                     </span>
                   )}
                 </label>
+                <select
+                  value={depthDays === null ? 'all' : String(depthDays)}
+                  onChange={e => setDepthDays(e.target.value === 'all' ? null : Number(e.target.value))}
+                  style={{ ...btnStyle, width: '100%', marginBottom: 4 }}
+                >
+                  {DEPTH_OPTIONS.map(o => {
+                    const bars = depthToBarCount(tf, o.days);
+                    const barsLabel = bars === Infinity ? 'all' : `~${bars.toLocaleString()} bars`;
+                    return (
+                      <option key={o.label} value={o.days === null ? 'all' : String(o.days)}>
+                        {o.label}  ({barsLabel})
+                      </option>
+                    );
+                  })}
+                </select>
+                {(() => {
+                  const bars = depthToBarCount(tf, depthDays);
+                  if (bars > 500_000) {
+                    return (
+                      <div style={{ fontSize: 10, color: '#ff9800', marginBottom: 6 }}>
+                        ⚠ {bars.toLocaleString()} bars may slow the browser. Consider a shorter window.
+                      </div>
+                    );
+                  }
+                  return <div style={{ marginBottom: 6 }} />;
+                })()}
 
                 <button
                   onClick={handleOpenSeries}
@@ -314,7 +408,9 @@ export const ChartPicker: React.FC = () => {
                     opacity: (busy || !symbol) ? 0.6 : 1,
                   }}
                 >
-                  {busy ? 'Loading…' : (loadAll ? 'Open (all bars)' : 'Open (last 2 000)')}
+                  {busy ? 'Loading…' : (depthDays === null
+                    ? 'Open (all history)'
+                    : `Open (last ${depthDays >= 365 ? `${(depthDays/365).toFixed(depthDays % 365 ? 1 : 0)}y` : `${depthDays}d`})`)}
                 </button>
               </section>
             </div>

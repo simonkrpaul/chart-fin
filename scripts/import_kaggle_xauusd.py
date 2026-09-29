@@ -77,9 +77,11 @@ try:
     from _manifest import (  # noqa: E402
         rebuild_manifest as _rebuild_manifest,
         tf_to_filename_suffix as _tf_to_filename_suffix,
+        update_meta_source as _update_meta_source,
     )
 except ImportError:
     _rebuild_manifest = None  # type: ignore[assignment]
+    _update_meta_source = None  # type: ignore[assignment]
     def _tf_to_filename_suffix(tf: str) -> str:  # local fallback
         return "1mo" if tf == "1M" else tf
 
@@ -153,15 +155,14 @@ def _write_canonical(dst: pathlib.Path, rows: Iterator[dict]) -> int:
 
 # ── Meta ────────────────────────────────────────────────────────────────────
 
-def _write_meta(sym: str) -> None:
-    import json
-    meta = {
-        "exchange": "Kaggle Gold XAUUSD (Metatrader)",
-        "description": "Gold (spot) vs US Dollar",
-        "sector": "Metals",
-        "industry": "Spot",
-    }
-    (FOREX_DIR / f"{sym}.meta.json").write_text(json.dumps(meta, indent=2))
+def _write_meta_for_tf(sym: str, tf: str) -> None:
+    if _update_meta_source is None:
+        return
+    _update_meta_source(
+        FOREX_DIR, sym, tf,
+        exchange="Kaggle Gold XAUUSD (Metatrader)",
+        description="Gold (spot) vs US Dollar",
+    )
 
 # ── Main ────────────────────────────────────────────────────────────────────
 
@@ -231,14 +232,14 @@ def main() -> int:
         rows = _iter_rows(src_name, tz)
         n = _write_canonical(dst, rows)
         print(f"    ✓ {dst.relative_to(REPO_ROOT)}  ({n:,} rows)")
+        _write_meta_for_tf(args.symbol, tf)
         processed += 1
 
     if processed == 0:
         print("Nothing to import. Are the XAU_<TF>_data.csv files in that directory?")
         return 1
 
-    _write_meta(args.symbol)
-    print(f"  ✓ {args.symbol}.meta.json")
+    print(f"  ✓ {args.symbol}.meta.json (per-TF provenance)")
 
     if _rebuild_manifest is not None:
         _rebuild_manifest(MARKETS_ROOT, repo_root=REPO_ROOT)

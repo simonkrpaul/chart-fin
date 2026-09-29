@@ -15,7 +15,11 @@ import type { OffsetOverlayConfig, OverlayMode } from '../types';
 import type { ScanOutput, ScanMode } from '../engine/correlationEngine';
 
 const MODES: OverlayMode[] = ['overlay', 'normalized', 'percent', 'index100'];
-const QUICK_DAYS = [10, 20, 30, 50, 87, 100, 121, 273, 343, 365, 526, 833, 1371, 1471, 1800];
+// Moon sidereal cycle (27.32 d) multiples — kept separate so they don't
+// visually blur with the general presets in the picker.
+const QUICK_DAYS_MOON_SIDEREAL = [27, 54, 81, 109, 136, 163, 191, 218, 245, 273];
+const QUICK_DAYS_GENERAL = [10, 20, 30, 50, 87, 100, 121, 343, 365, 526, 833, 1371, 1471, 1800];
+const QUICK_DAYS = [...QUICK_DAYS_GENERAL, ...QUICK_DAYS_MOON_SIDEREAL];
 const PALETTE = ['#f5c518','#4fc3f7','#ff7043','#ab47bc','#66bb6a','#ec407a','#ffffff','#ff5252'];
 
 /** Format a Date as YYYY-MM-DD for <input type="date"> */
@@ -177,9 +181,16 @@ export const OverlayPanel: React.FC = () => {
           style={inputStyle}
         >
           <option value="" disabled>Select days…</option>
-          {QUICK_DAYS.map(d => (
-            <option key={d} value={d}>{d} days</option>
-          ))}
+          <optgroup label="General">
+            {QUICK_DAYS_GENERAL.map(d => (
+              <option key={d} value={d}>{d} days</option>
+            ))}
+          </optgroup>
+          <optgroup label="Moon sidereal cycle (≈27.3 d)">
+            {QUICK_DAYS_MOON_SIDEREAL.map((d, i) => (
+              <option key={d} value={d}>{d} days  · ×{i + 1}</option>
+            ))}
+          </optgroup>
         </select>
         <input
           type="number"

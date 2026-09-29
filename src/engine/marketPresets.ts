@@ -108,10 +108,11 @@ const FOREX: MarketPreset = {
     timezone: 'UTC',
     regularOpen: '00:00',
     regularClose: '23:59',
-    // Trading Mon–Fri; Sunday afternoon extends via Asia open, but we
-    // approximate by treating Sunday as a trading day too. That keeps
-    // weekend gaps (Saturday) visible while covering the Sunday session.
-    tradingDays: [1, 2, 3, 4, 5, 7],
+    // Mon-Fri only. Both Saturday and Sunday render as weekend spacers
+    // in calendar-day mode. Real Sunday-evening ticks (if the dataset has
+    // them, e.g. Dukascopy 22:00 UTC Asia open) are still kept because
+    // `_applyGapVisibility` unconditionally keeps any slot with a candle.
+    tradingDays: [1, 2, 3, 4, 5],
     holidays: [
       '2026-01-01', '2026-12-25', '2026-12-26',
     ],
