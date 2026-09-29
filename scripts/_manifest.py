@@ -47,6 +47,50 @@ def tf_to_filename_suffix(tf: str) -> str:
     return "1mo" if tf == "1M" else tf
 
 
+def update_meta_source(
+    market_dir: pathlib.Path,
+    symbol: str,
+    timeframe: str,
+    exchange: str,
+    description: str | None = None,
+    extra: dict | None = None,
+) -> None:
+    """Merge a per-timeframe provenance entry into `<symbol>.meta.json`.
+
+    Reads the existing meta file (if any), adds/overwrites the entry under
+    `sources[timeframe]`, and writes it back. Other timeframes' entries and
+    top-level fields are preserved so one XAUUSD.meta.json can advertise
+    Kaggle for 1m + evtradelabs for 5m + resampled-from-1m for the rest.
+    """
+    meta_path = market_dir / f"{symbol}.meta.json"
+    meta: dict = {}
+    if meta_path.exists():
+        try:
+            meta = json.loads(meta_path.read_text()) or {}
+        except json.JSONDecodeError:
+            meta = {}
+
+    sources = meta.get("sources")
+    if not isinstance(sources, dict):
+        sources = {}
+    entry: dict = {"exchange": exchange}
+    if description:
+        entry["description"] = description
+    if extra:
+        entry.update(extra)
+    sources[timeframe] = entry
+    meta["sources"] = sources
+
+    # Keep a top-level exchange/description too so pre-per-TF code still
+    # has something to display. Uses the newest write.
+    meta.setdefault("exchange", exchange)
+    if description:
+        meta.setdefault("description", description)
+
+    market_dir.mkdir(parents=True, exist_ok=True)
+    meta_path.write_text(json.dumps(meta, indent=2))
+
+
 def rebuild_manifest(
     markets_dir: pathlib.Path,
     repo_root: pathlib.Path | None = None,
@@ -95,10 +139,16 @@ def rebuild_manifest(
             if meta_file.exists():
                 try:
                     meta = json.loads(meta_file.read_text())
-                    if meta.get("exchange"):
-                        entry["exchange"] = meta["exchange"]
-                    if meta.get("description"):
-                        entry["description"] = meta["description"]
+                    # Per-TF override wins; symbol-level exchange/description
+                    # is the fallback. Lets one symbol expose multiple sources
+                    # (e.g. Kaggle 1m + evtradelabs 5m under one XAUUSD).
+                    per_tf = (meta.get("sources") or {}).get(tf) or {}
+                    exchange = per_tf.get("exchange") or meta.get("exchange")
+                    description = per_tf.get("description") or meta.get("description")
+                    if exchange:
+                        entry["exchange"] = exchange
+                    if description:
+                        entry["description"] = description
                 except json.JSONDecodeError:
                     pass
             sources.append(entry)
