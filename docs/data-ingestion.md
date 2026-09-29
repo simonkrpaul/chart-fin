@@ -59,6 +59,7 @@ manifest without closing/reopening.
 | [import_market.py](../scripts/import_market.py) | Any CSV file | any | Generic promoter — moves an existing CSV into the market layout |
 | [mock_alpaca.py](../scripts/mock_alpaca.py) | Synthetic (Alpaca schema) | `us_equity` | 1-min OHLCV, NYSE session hours, no network needed |
 | [mock_data.py](../scripts/mock_data.py) | Synthetic | 4 profiles | Crypto / US equity / ASX / forex — deterministic random-walk |
+| [mt5_sync.py](../scripts/mt5_sync.py) | MetaTrader 5 terminal (Pepperstone etc.) | `forex` | **Windows-only**. Live broker bars — one-shot or loop every N seconds |
 | [fill_gaps.py](../scripts/fill_gaps.py) | Existing Bybit CSV | `crypto` | Detects + backfills missing bars |
 
 All of these use the same helper — [`scripts/_manifest.py`](../scripts/_manifest.py) —
@@ -902,3 +903,170 @@ For `XAUUSD_EVTL`:
 15m — evtradelabs XAUUSD (mid), resampled from 5m
 1d — evtradelabs XAUUSD (mid), resampled from 5m
 ```
+
+---
+
+## 9. MetaTrader 5 live sync (Pepperstone demo, Windows)
+
+Pulls OHLC bars straight from a running MT5 terminal and writes them to `public/data/markets/forex/XAUUSD_MT5_<tf>.csv`. Runs one-shot or on a fixed loop (every 10–15 min is typical), so the chart-fin app always sees fresh bars after a **↻ Rescan disk**.
+
+Follows the "one symbol per source" convention — MT5 data lands under a **separate** symbol (default `XAUUSD_MT5`) so it never touches the existing `XAUUSD` (Kaggle+ISO) or `XAUUSD_EVTL` (evtradelabs) files.
+
+### Requirements
+
+- **Windows** — the `MetaTrader5` PyPI package is Windows-only. macOS/Linux users have to run this script on a Windows box (VM, VPS, or the same physical Windows machine as MT5).
+- **Python 3.10+** (3.12 recommended).
+- `pip install MetaTrader5`.
+- The **MT5 terminal** installed and **logged in** to your Pepperstone (or any broker) demo/live account. The Python package attaches to the running terminal — you don't ship credentials in the script.
+
+### Auth model (safe by default)
+
+Two modes:
+
+| Mode | How | When to use | Where the password lives |
+| --- | --- | --- | --- |
+| **Attach** (default) | `mt5.initialize()` with no args — inherits the running MT5 terminal's session | You already have MT5 open + logged in | Nowhere in Python. MT5 remembers it. |
+| **Headless** | `--headless` with `MT5_LOGIN` / `MT5_SERVER` / `MT5_PASSWORD` env vars | Running the script on a headless box (VPS) where no one is at the keyboard | Environment variables sourced from a git-ignored `.env` file |
+
+**Recommendation for a demo account on your desktop**: use attach mode. Nothing sensitive touches disk or git.
+
+### First run — check the connection
+
+Open the MT5 terminal, log in to your Pepperstone demo, and confirm XAUUSD is in the Market Watch panel. Then:
+
+```powershell
+# From the chart-fin project folder on Windows
+python scripts/mt5_sync.py
+```
+
+Expected output:
+
+```
+[mt5_sync] connected to Pepperstone-Demo  account=12345678  currency=USD
+[mt5_sync] using MT5 symbol: XAUUSD
+
+[mt5_sync] cycle @ 2026-09-29T14:22:11+00:00
+  ✓   1m  fetched= 2000  existing=       0  new= 2000  →  XAUUSD_MT5_1m.csv
+  ✓   5m  fetched= 2000  existing=       0  new= 2000  →  XAUUSD_MT5_5m.csv
+  ✓  15m  fetched= 2000  existing=       0  new= 2000  →  XAUUSD_MT5_15m.csv
+  ✓   1h  fetched= 2000  existing=       0  new= 2000  →  XAUUSD_MT5_1h.csv
+  ✓   4h  fetched= 2000  existing=       0  new= 2000  →  XAUUSD_MT5_4h.csv
+  ✓   1d  fetched= 2000  existing=       0  new= 2000  →  XAUUSD_MT5_1d.csv
+  ✓   1w  fetched= 2000  existing=       0  new= 2000  →  XAUUSD_MT5_1w.csv
+  ✓   1M  fetched= 2000  existing=       0  new= 2000  →  XAUUSD_MT5_1mo.csv
+```
+
+Then in the browser: **📈 Open chart → ↻ Rescan disk**. `forex → XAUUSD_MT5` is now available at every TF, each labelled `MetaTrader5 live (XAUUSD)` in the picker's Timeframe dropdown.
+
+### Loop mode (every 10–15 min)
+
+```powershell
+# Every 10 minutes
+python scripts/mt5_sync.py --loop 600
+
+# Every 15 minutes, only intraday TFs (skip 1w / 1M which barely change)
+python scripts/mt5_sync.py --loop 900 --tf 1m 5m 15m 1h 4h 1d
+```
+
+The loop is resumable — Ctrl-C to stop, restart with the same command, dedup is by-timestamp so no duplicates.
+
+Run it as a **Windows Scheduled Task** for unattended sync:
+
+1. Task Scheduler → Create Basic Task
+2. Trigger: `Daily`, then `Repeat task every 10 minutes`
+3. Action: `python.exe` with argument `C:\path\to\chart-fin\scripts\mt5_sync.py`
+4. Start in: `C:\path\to\chart-fin`
+
+Or install [nssm](https://nssm.cc/) and register `python.exe scripts/mt5_sync.py --loop 600` as a service.
+
+### Common flags
+
+| Flag | Purpose |
+| --- | --- |
+| `--symbol XAUUSD_MT5` | chart-fin symbol name for output. Keep DIFFERENT from other XAUUSD sources |
+| `--mt5-symbol XAUUSD` | Broker-side symbol. Auto-tries `.raw` / `.i` / `GOLD` if the plain name isn't found |
+| `--tf 5m 15m 1h` | Restrict to specific TFs (default: all 8) |
+| `--bars 2000` | Bars per TF per cycle. MT5 caps around 100 k; 2 000 is plenty for a 10 min loop |
+| `--loop 600` | Repeat every 600 s. `0` = one-shot (default) |
+| `--headless` | Log in from the script instead of attaching |
+
+### Pepperstone symbol names
+
+Different broker accounts advertise XAUUSD under slightly different names. `mt5_sync.py` probes automatically — you'll see one of:
+
+```
+[mt5_sync] using MT5 symbol: XAUUSD
+[mt5_sync] using MT5 symbol: XAUUSD.raw     ← Pepperstone Razor (ECN) account
+[mt5_sync] using MT5 symbol: XAUUSD.i       ← some cent accounts
+[mt5_sync] using MT5 symbol: GOLD           ← some brokers
+```
+
+If none match, open MT5 → View → Symbols → find the actual name → pass with `--mt5-symbol <name>`.
+
+### Seeding `XAUUSD_MT5` with existing history (evtradelabs / any other source)
+
+Fresh `mt5_sync.py` runs only give you the last ~2 000 bars per TF that MT5 returns. If you want the full multi-year evtradelabs history behind you and just want MT5 to extend the tail from now on, copy the files once — the sync script's merge is timestamp-keyed and is happy to append to a pre-populated CSV.
+
+**Mac / Linux:**
+
+```bash
+cd /Users/rajanpsi/Dev/simonkrpaul/chart-fin
+
+# Seed a single TF (5m)
+cp public/data/markets/forex/XAUUSD_EVTL_5m.csv \
+   public/data/markets/forex/XAUUSD_MT5_5m.csv
+
+# Or seed the whole ladder in one shot
+for tf in 5m 15m 1h 4h 1d 1w 1mo; do
+  cp public/data/markets/forex/XAUUSD_EVTL_${tf}.csv \
+     public/data/markets/forex/XAUUSD_MT5_${tf}.csv
+done
+
+# Refresh the manifest so the picker sees XAUUSD_MT5 before the first sync
+python3.12 -c "import sys,pathlib; sys.path.insert(0,'scripts'); from _manifest import rebuild_manifest; p=pathlib.Path('.').resolve(); rebuild_manifest(p/'public'/'data'/'markets', repo_root=p)"
+```
+
+**Windows PowerShell:**
+
+```powershell
+cd C:\path\to\chart-fin
+
+# One TF
+Copy-Item public\data\markets\forex\XAUUSD_EVTL_5m.csv `
+          public\data\markets\forex\XAUUSD_MT5_5m.csv
+
+# Whole ladder
+foreach ($tf in @('5m','15m','1h','4h','1d','1w','1mo')) {
+  Copy-Item "public\data\markets\forex\XAUUSD_EVTL_${tf}.csv" `
+            "public\data\markets\forex\XAUUSD_MT5_${tf}.csv"
+}
+
+python scripts\mt5_sync.py --tf 5m 15m 1h 4h 1d 1w 1M   # first sync — appends only new bars
+python scripts\mt5_sync.py --loop 600                   # keep it live
+```
+
+Expected first-cycle output after seeding:
+
+```
+[mt5_sync]   5m  fetched= 2000  existing=1,627,794  new= <few hundred>  →  XAUUSD_MT5_5m.csv
+```
+
+`existing` = your seeded history, `new` = only the bars whose timestamps are past the last row in the seed. Subsequent cycles add only whatever MT5 has generated since the previous run.
+
+**Trade-offs to know about:**
+
+- Historical bars use whatever price side the seed source stored (evtradelabs = mid). Fresh MT5 bars use whatever your broker publishes (Pepperstone = broker-bid). There will be a small price seam wherever the switchover happens — cosmetic on the chart, a few pips on XAUUSD.
+- Every cycle overwrites `XAUUSD_MT5.meta.json → sources[<tf>]` with `"MetaTrader5 live (XAUUSD)"` even though most of the rows are actually from the seed source. If you want a truer label, edit that field manually once — the sync script only touches the per-TF entry it's writing, so hand-edits to _other_ TFs stick.
+- After copying you can safely delete `XAUUSD_EVTL_*` files if you don't need the second symbol — the seeded rows already live in `XAUUSD_MT5_*`.
+
+### Cross-platform notes
+
+The chart-fin **Vite app** itself runs identically on Windows and macOS — `pnpm install && pnpm dev` from the project folder just works. All the ingestion scripts (`import_*`, `download_*`) use `pathlib.Path`, so paths port cleanly.
+
+The **only** OS-locked piece is `mt5_sync.py` (blocked by the MT5 Python package). Everything else you've ingested from a Mac keeps working when you clone the repo on Windows.
+
+### What NOT to do
+
+- **Don't commit credentials.** If you use headless mode, put the env vars in `.env` and add `.env` to `.gitignore`.
+- **Don't share the MT5 investor password with headless mode by accident** — the investor password grants read-only account access, but the main password grants trading. Use the read-only one if MT5's `INVESTOR_PASSWORD_MODE` flag suits your broker.
+- **Don't run the loop while manually importing** (`import_evtradelabs_xauusd.py --symbol XAUUSD_MT5 …`) — the two would fight over the same files. Different symbols keep them out of each other's way.
