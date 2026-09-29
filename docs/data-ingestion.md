@@ -996,7 +996,8 @@ Different broker accounts advertise XAUUSD under slightly different names. `mt5_
 
 ```
 [mt5_sync] using MT5 symbol: XAUUSD
-[mt5_sync] using MT5 symbol: XAUUSD.raw     ← Pepperstone Razor (ECN) account
+[mt5_sync] using MT5 symbol: XAUUSD.a       ← Pepperstone demo
+[mt5_sync] using MT5 symbol: XAUUSD.raw     ← Pepperstone Razor (ECN)
 [mt5_sync] using MT5 symbol: XAUUSD.i       ← some cent accounts
 [mt5_sync] using MT5 symbol: GOLD           ← some brokers
 ```

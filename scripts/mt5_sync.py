@@ -140,7 +140,13 @@ def _connect(args) -> None:
 def _resolve_symbol(preferred: str) -> str:
     """Return the actual broker-side symbol name. Tries a few common suffixes."""
     mt5 = _load_mt5()
-    candidates = [preferred, f"{preferred}.raw", f"{preferred}.i", f"{preferred}+"]
+    candidates = [
+        preferred,
+        f"{preferred}.a",     # Pepperstone demo (and some other cTrader-linked feeds)
+        f"{preferred}.raw",   # Pepperstone Razor / ECN
+        f"{preferred}.i",     # some cent / inversed accounts
+        f"{preferred}+",      # a few STP accounts
+    ]
     if preferred == "XAUUSD":
         candidates.extend(["GOLD", "XAUUSDm"])
     for cand in candidates:
