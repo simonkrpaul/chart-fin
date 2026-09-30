@@ -213,6 +213,10 @@ export interface ChartState {
   overlayConfigs: OffsetOverlayConfig[];
   overlays: Record<string, OffsetOverlay>; // keyed by config.id
   historicalCandlesByOverlay: Record<string, RawCandle[]>;
+  /** Master switch that hides every offset overlay without discarding each
+   *  config's own `visible` flag — flip off for a one-click clean chart, flip
+   *  back on to restore whatever the user had toggled per-overlay. */
+  showOverlays: boolean;
 
   // Drawings
   drawings: Drawing[];
@@ -359,6 +363,7 @@ export interface ChartActions {
   addOverlay: (config: OffsetOverlayConfig, historicalCandles: RawCandle[]) => void;
   removeOverlay: (id: string) => void;
   toggleOverlay: (id: string) => void;
+  toggleShowOverlays: () => void;
   updateOverlayConfig: (id: string, patch: Partial<OffsetOverlayConfig>) => void;
 
   // Drawings
@@ -473,6 +478,7 @@ export function createChartStore(panelId: string = 'p1'): StoreApi<ChartState & 
     overlayConfigs: [],
     overlays: {},
     historicalCandlesByOverlay: {},
+    showOverlays: true,
 
     // ── drawings ────────────────────────────────────────────────────────────
     drawings: [],
@@ -1178,6 +1184,10 @@ export function createChartStore(panelId: string = 'p1'): StoreApi<ChartState & 
       });
     },
 
+    toggleShowOverlays: () => {
+      set(state => { state.showOverlays = !state.showOverlays; });
+    },
+
     updateOverlayConfig: (id, patch) => {
       set(state => {
         const cfg = state.overlayConfigs.find(c => c.id === id);
@@ -1737,7 +1747,7 @@ export function useChartStore(): ChartState & ChartActions {
 // ─────────────────────────────────────────────────────────────────────────────
 
 function _autoFitPriceScale(set: any, get: () => ChartState & ChartActions) {
-  const { primarySlots, viewport, priceScale, overlays, overlayConfigs, replay } = get();
+  const { primarySlots, viewport, priceScale, overlays, overlayConfigs, replay, showOverlays } = get();
   if (!priceScale.autoFit) return;
 
   const start = viewport.firstSlotIndex;
@@ -1759,7 +1769,7 @@ function _autoFitPriceScale(set: any, get: () => ChartState & ChartActions) {
   const primaryMax = max;
   const primaryRange = primaryMax - primaryMin;
   for (const cfg of overlayConfigs) {
-    if (!cfg.visible || cfg.mode === 'percent' || cfg.mode === 'index100') continue;
+    if (!showOverlays || !cfg.visible || cfg.mode === 'percent' || cfg.mode === 'index100') continue;
     const ov = overlays[cfg.id];
     if (!ov) continue;
     // Check if the overlay is in a similar price range to the primary

@@ -36,6 +36,8 @@ export const OverlayPanel: React.FC = () => {
     addOverlay,
     removeOverlay,
     toggleOverlay,
+    showOverlays,
+    toggleShowOverlays,
     updateOverlayConfig,
     theme,
   } = useChartStore();
@@ -45,11 +47,11 @@ export const OverlayPanel: React.FC = () => {
     const map: Record<string, { r: number; n: number } | null> = {};
     for (const cfg of overlayConfigs) {
       const ov = overlays[cfg.id];
-      if (!ov || !cfg.visible) { map[cfg.id] = null; continue; }
+      if (!ov || !cfg.visible || !showOverlays) { map[cfg.id] = null; continue; }
       map[cfg.id] = computeCorrelation(primarySlots, ov.projectedCandles);
     }
     return map;
-  }, [overlayConfigs, overlays, primarySlots]);
+  }, [overlayConfigs, overlays, primarySlots, showOverlays]);
 
   // Default anchor = 2020-01-01 (widely-useful reference for offset scans).
   const [anchorDate, setAnchorDate] = useState('2020-01-01');
@@ -155,7 +157,27 @@ export const OverlayPanel: React.FC = () => {
 
   return (
     <div style={{ background: bg, color: text, padding: 12, width: '100%', boxSizing: 'border-box', overflowY: 'auto', fontSize: 12 }}>
-      <div style={{ fontWeight: 600, marginBottom: 10 }}>Offset Comparisons</div>
+      <div style={{
+        display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+        marginBottom: 10, gap: 8,
+      }}>
+        <div style={{ fontWeight: 600 }}>Offset Comparisons</div>
+        <button
+          onClick={toggleShowOverlays}
+          title={showOverlays
+            ? 'Hide every offset overlay on the chart (each overlay\'s own visibility is remembered)'
+            : 'Restore every offset overlay to its own visibility setting'}
+          style={{
+            fontSize: 10, padding: '2px 8px', cursor: 'pointer',
+            background: showOverlays ? 'transparent' : '#2962ff',
+            color: showOverlays ? text : '#fff',
+            border: `1px solid ${showOverlays ? border : '#2962ff'}`,
+            borderRadius: 3,
+          }}
+        >
+          {showOverlays ? '👁 Hide all' : '👁 Show all'}
+        </button>
+      </div>
 
       {/* Anchor date */}
       <div style={{ marginBottom: 6 }}>

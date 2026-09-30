@@ -6,7 +6,7 @@ import { useChartStore } from '../store/chartStore';
 
 export const CandleTooltip: React.FC = () => {
   const {
-    crosshair, primarySlots, theme, overlayConfigs, overlays,
+    crosshair, primarySlots, theme, overlayConfigs, overlays, showOverlays,
     session, timeframe, showIndicatorsAndDrawings, currentSeries, rawCandles,
   } = useChartStore();
 
@@ -109,7 +109,7 @@ export const CandleTooltip: React.FC = () => {
       <div style={{ opacity: 0.7 }}>Vol {formatVol(c.volume)}</div>
 
       {/* Overlay values at same slot */}
-      {showIndicatorsAndDrawings && overlayConfigs.filter(cfg => cfg.visible).map(cfg => {
+      {showIndicatorsAndDrawings && showOverlays && overlayConfigs.filter(cfg => cfg.visible).map(cfg => {
         const ov = overlays[cfg.id];
         if (!ov) return null;
         // Match by nearest slot index (fractional for virtual future slots)

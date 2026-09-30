@@ -59,12 +59,19 @@ from _manifest import (  # noqa: E402
     tf_to_filename_suffix as _tf_suffix,
     update_meta_source as _update_meta_source,
 )
+from _resample import (  # noqa: E402
+    ZoneInfo,
+    forex_daily_bucket_ts,
+    forex_weekly_bucket_ts,
+    minute_bucket,
+    month_bucket,
+    resample_bars,
+)
 
 _MINUTE_TFS: dict[str, int] = {
     "15m": 15,
     "1h":  60,
     "4h":  240,
-    "1d":  60 * 24,
 }
 
 
@@ -218,6 +225,13 @@ def main() -> int:
                    help="replace: overwrite <symbol>_5m.csv. merge: union with existing.")
     p.add_argument("--skip-resample", action="store_true",
                    help="Don't rewrite the 15m/1h/4h/1d/1w/1mo derivatives.")
+    p.add_argument("--boundary-tz", default="America/New_York",
+                   help="IANA timezone whose midnight defines the daily/weekly "
+                        "bar boundary. Forex convention: America/New_York with "
+                        "--boundary-hour 17 (i.e., 17:00 NY = trading-day start).")
+    p.add_argument("--boundary-hour", type=int, default=17,
+                   help="Hour of --boundary-tz that opens the trading day. "
+                        "17 = forex (5 pm NY). 0 = calendar day (UTC midnight).")
     args = p.parse_args()
 
     src = pathlib.Path(args.src_dir).expanduser().resolve()
@@ -269,10 +283,15 @@ def main() -> int:
 
     if not args.skip_resample:
         sorted_5m = [(ts, *v) for ts, v in sorted(merged.items())]
+        boundary_tz = ZoneInfo(args.boundary_tz)
         print(f"\n→ resampling to coarser TFs (single-pass from 5m)…")
+        print(f"    daily/weekly boundary: {args.boundary_hour:02d}:00 {args.boundary_tz}")
+
+        # Fixed-minute buckets (15m, 1h, 4h) — UTC-floor is correct here;
+        # intraday bars don't have the Sunday-evening problem.
         for tf, bucket in _MINUTE_TFS.items():
             path = FOREX_DIR / f"{args.symbol}_{_tf_suffix(tf)}.csv"
-            n = _write_bars(path, _resample_minute(sorted_5m, bucket))
+            n = _write_bars(path, resample_bars(sorted_5m, minute_bucket(bucket)))
             print(f"  ✓ {tf:>4}  {n:>10,} rows  →  {path.name}")
             _update_meta_source(
                 FOREX_DIR, args.symbol, tf,
@@ -280,14 +299,19 @@ def main() -> int:
                 description="Derived from evtradelabs 5m at import time",
             )
 
-        for tf, resampler in (("1w", _resample_week), ("1M", _resample_month)):
+        # 1d, 1w — forex convention: trading day starts at 17:00 NY, so Sunday
+        # evening rolls into Monday's daily/weekly candle.
+        daily_key = lambda ts: forex_daily_bucket_ts(ts, boundary_tz, args.boundary_hour)
+        weekly_key = lambda ts: forex_weekly_bucket_ts(ts, boundary_tz, args.boundary_hour)
+        for tf, key_fn in (("1d", daily_key), ("1w", weekly_key), ("1M", month_bucket())):
             path = FOREX_DIR / f"{args.symbol}_{_tf_suffix(tf)}.csv"
-            n = _write_bars(path, resampler(sorted_5m))
+            n = _write_bars(path, resample_bars(sorted_5m, key_fn))
             print(f"  ✓ {tf:>4}  {n:>10,} rows  →  {path.name}")
             _update_meta_source(
                 FOREX_DIR, args.symbol, tf,
                 exchange=f"evtradelabs XAUUSD ({args.price}), resampled from 5m",
-                description="Derived from evtradelabs 5m at import time",
+                description=(f"Trading day boundary {args.boundary_hour:02d}:00 {args.boundary_tz}"
+                             if tf in ("1d", "1w") else "Calendar-month bucket"),
             )
 
     print(f"\n→ rebuilding manifest…")
