@@ -54,6 +54,7 @@ export const ChartCanvas: React.FC<Props> = ({ width, height }) => {
     indicatorSeries,
     overlayConfigs,
     overlays,
+    showOverlays,
     drawings,
     drawingInProgress,
     activeDrawingTool,
@@ -157,7 +158,7 @@ export const ChartCanvas: React.FC<Props> = ({ width, height }) => {
     const allDrawings = showIndicatorsAndDrawings
       ? (drawingInProgress ? [...drawings, drawingInProgress] : drawings)
       : [];
-    const visibleOverlays = showIndicatorsAndDrawings
+    const visibleOverlays = showIndicatorsAndDrawings && showOverlays
       ? overlayConfigs
         .filter(c => c.visible)
         .map(c => overlays[c.id])
@@ -246,6 +247,7 @@ export const ChartCanvas: React.FC<Props> = ({ width, height }) => {
     replay,
     showIndicatorsAndDrawings,
     showEmptyGapSlots,
+    showOverlays,
     hoveredId,
     backtestSignals,
     showBacktestSignals,

@@ -48,16 +48,23 @@ from _manifest import (  # noqa: E402
     tf_to_filename_suffix as _tf_suffix,
     update_meta_source as _update_meta_source,
 )
+from _resample import (  # noqa: E402
+    ZoneInfo,
+    forex_daily_bucket_ts,
+    forex_weekly_bucket_ts,
+    minute_bucket,
+    month_bucket,
+    resample_bars,
+)
 
 # ── Resample targets (all coarser than 1m) ─────────────────────────────────
-# Bucket size in minutes for TFs that are pure minute-multiples. 1w and 1mo
-# are handled with calendar arithmetic below.
+# Intraday buckets are safe with UTC-floor arithmetic. 1d / 1w need the
+# forex trading-day boundary to match TradingView / MT5.
 _MINUTE_TFS: dict[str, int] = {
     "5m":  5,
     "15m": 15,
     "1h":  60,
     "4h":  240,
-    "1d":  60 * 24,
 }
 
 
@@ -227,6 +234,13 @@ def main() -> int:
                    help="replace: overwrite existing 1m file. merge: union timestamps, new wins on collision.")
     p.add_argument("--skip-resample", action="store_true",
                    help="Don't rewrite the 5m/15m/1h/4h/1d/1w/1mo derivatives.")
+    p.add_argument("--boundary-tz", default="America/New_York",
+                   help="IANA timezone whose midnight defines the daily/weekly "
+                        "bar boundary. Forex convention: America/New_York with "
+                        "--boundary-hour 17.")
+    p.add_argument("--boundary-hour", type=int, default=17,
+                   help="Hour of --boundary-tz that opens the trading day. "
+                        "17 = forex (5 pm NY). 0 = calendar day (UTC midnight).")
     args = p.parse_args()
 
     src = pathlib.Path(args.src).expanduser().resolve()
@@ -262,19 +276,23 @@ def main() -> int:
 
     if not args.skip_resample:
         sorted_1m = [(ts, *v) for ts, v in sorted(merged.items())]
+        boundary_tz = ZoneInfo(args.boundary_tz)
         print(f"\n→ resampling to coarser TFs (single-pass)…")
+        print(f"    daily/weekly boundary: {args.boundary_hour:02d}:00 {args.boundary_tz}")
+
+        # Fixed-minute buckets (5m/15m/1h/4h): UTC-floor is correct.
         for tf, bucket in _MINUTE_TFS.items():
             path = FOREX_DIR / f"{args.symbol}_{_tf_suffix(tf)}.csv"
-            n = _write_bars(path, _resample_minute(sorted_1m, bucket))
+            n = _write_bars(path, resample_bars(sorted_1m, minute_bucket(bucket)))
             print(f"  ✓ {tf:>4}  {n:>10,} rows  →  {path.name}")
 
-        path = FOREX_DIR / f"{args.symbol}_{_tf_suffix('1w')}.csv"
-        n = _write_bars(path, _resample_week(sorted_1m))
-        print(f"  ✓  1w  {n:>10,} rows  →  {path.name}")
-
-        path = FOREX_DIR / f"{args.symbol}_{_tf_suffix('1M')}.csv"
-        n = _write_bars(path, _resample_month(sorted_1m))
-        print(f"  ✓  1M  {n:>10,} rows  →  {path.name}")
+        # Daily / weekly: forex trading-day boundary.
+        daily_key = lambda ts: forex_daily_bucket_ts(ts, boundary_tz, args.boundary_hour)
+        weekly_key = lambda ts: forex_weekly_bucket_ts(ts, boundary_tz, args.boundary_hour)
+        for tf, key_fn in (("1d", daily_key), ("1w", weekly_key), ("1M", month_bucket())):
+            path = FOREX_DIR / f"{args.symbol}_{_tf_suffix(tf)}.csv"
+            n = _write_bars(path, resample_bars(sorted_1m, key_fn))
+            print(f"  ✓ {tf:>4}  {n:>10,} rows  →  {path.name}")
 
     _write_meta(args.symbol, wrote_resampled=not args.skip_resample)
     print(f"\n→ rebuilding manifest…")

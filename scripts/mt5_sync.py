@@ -82,6 +82,11 @@ from _manifest import (  # noqa: E402
     tf_to_filename_suffix as _tf_suffix,
     update_meta_source as _update_meta_source,
 )
+from _resample import (  # noqa: E402
+    forex_daily_bucket_ts,
+    forex_weekly_bucket_ts,
+    resample_bars,
+)
 
 # ── Timeframe mapping ─────────────────────────────────────────────────────
 # chart-fin TF  → MT5 constant. Filled in lazily after MT5 is imported.
@@ -286,12 +291,54 @@ def _merge_into_csv(
 _TF_MINUTES = {"1m": 1, "5m": 5, "15m": 15, "1h": 60, "4h": 240, "1d": 1440, "1w": 10080, "1M": 43200}
 
 
+def _rebuild_daily_from_5m(sym: str, boundary_tz_name: str, boundary_hour: int) -> None:
+    """After a sync cycle, regenerate 1d and 1w from <sym>_5m.csv using the
+    forex trading-day boundary (default 17:00 NY). MT5's native 1d bars are
+    stamped at broker midnight (Athens ≈ 21 UTC in summer) which reads as
+    the wrong calendar day on our chart — deriving from 5m fixes that.
+    """
+    src = FOREX_DIR / f"{sym}_5m.csv"
+    if not src.exists():
+        return
+    boundary_tz = ZoneInfo(boundary_tz_name)
+    with src.open("r", encoding="utf-8", newline="") as fh:
+        r = csv.reader(fh); next(r, None)
+        bars = [(int(row[0]), float(row[1]), float(row[2]), float(row[3]),
+                 float(row[4]), float(row[5])) for row in r if len(row) >= 6]
+    if not bars:
+        return
+    for tf, key_fn in (
+        ("1d", lambda ts: forex_daily_bucket_ts(ts, boundary_tz, boundary_hour)),
+        ("1w", lambda ts: forex_weekly_bucket_ts(ts, boundary_tz, boundary_hour)),
+    ):
+        path = FOREX_DIR / f"{sym}_{_tf_suffix(tf)}.csv"
+        n = 0
+        with path.open("w", encoding="utf-8", newline="") as fh:
+            w = csv.writer(fh)
+            w.writerow(["timestamp", "open", "high", "low", "close", "volume"])
+            for row in resample_bars(bars, key_fn):
+                w.writerow(row); n += 1
+        print(f"  ↻ {tf:>4}  derived from 5m ({boundary_hour:02d}:00 {boundary_tz_name})  {n:>6,} rows  →  {path.name}")
+        _update_meta_source(
+            FOREX_DIR, sym, tf,
+            exchange=f"MetaTrader5 5m → resampled ({boundary_hour:02d}:00 {boundary_tz_name})",
+            description="Derived from MT5 5m stream using forex trading-day boundary",
+        )
+
+
 def _one_cycle(args, mt5_symbol: str, broker_tz: ZoneInfo) -> None:
     now_utc = datetime.now(tz=timezone.utc)
     print(f"\n[mt5_sync] cycle @ {now_utc.isoformat(timespec='seconds')}")
     now_ms = int(now_utc.timestamp() * 1000)
 
-    for tf in args.tf:
+    # Skip 1d / 1w on the MT5 fetch — they'll be derived from 5m below to
+    # avoid the broker-midnight labeling mismatch. Runs anyway if the user
+    # explicitly whittled --tf to only include 1d/1w.
+    intraday_tfs = [t for t in args.tf if t not in ("1d", "1w")]
+    fetch_tfs = intraday_tfs or args.tf
+    derive_daily = ("1d" in args.tf or "1w" in args.tf) and "5m" in fetch_tfs
+
+    for tf in fetch_tfs:
         path = FOREX_DIR / f"{args.symbol}_{_tf_suffix(tf)}.csv"
         last_ts = _last_ts_in_csv(path)
 
@@ -323,6 +370,10 @@ def _one_cycle(args, mt5_symbol: str, broker_tz: ZoneInfo) -> None:
             exchange=f"MetaTrader5 live ({mt5_symbol}, tz={args.broker_tz})",
             description="MT5 broker feed via mt5_sync.py, converted to UTC",
         )
+
+    if derive_daily:
+        _rebuild_daily_from_5m(args.symbol, args.boundary_tz, args.boundary_hour)
+
     _rebuild_manifest(MARKETS_ROOT, repo_root=REPO_ROOT, quiet=True)
 
 
@@ -349,6 +400,14 @@ def main() -> int:
                         "Pepperstone = Europe/Athens (EEST/EET, DST-aware). "
                         "Fixed-offset examples: 'Etc/GMT-3' (=UTC+3), 'Etc/GMT-2' (=UTC+2). "
                         "Bar timestamps are converted from this tz to UTC before writing.")
+    p.add_argument("--boundary-tz", default="America/New_York",
+                   help="IANA timezone whose --boundary-hour defines the daily/weekly "
+                        "bar boundary. Forex convention: America/New_York with hour=17.")
+    p.add_argument("--boundary-hour", type=int, default=17,
+                   help="Hour of --boundary-tz that opens the trading day. "
+                        "17 = forex (5 pm NY, matches TradingView / MT5). "
+                        "1d and 1w are always derived from 5m at this boundary "
+                        "instead of fetched natively (which uses broker midnight).")
     p.add_argument("--loop", type=int, default=0, metavar="SECONDS",
                    help="Run forever, sleeping SECONDS between cycles. 0 = one-shot (default).")
     p.add_argument("--headless", action="store_true",

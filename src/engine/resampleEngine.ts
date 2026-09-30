@@ -65,22 +65,53 @@ export function filterBySessionHours(
 /**
  * Aggregate `source` candles into `targetTf` buckets.
  * Handles all 8 supported timeframes.
+ *
+ * Daily / weekly buckets follow the forex trading-day convention (matches
+ * TradingView / MT5 / CME): the trading day starts at 17:00 New York.
+ * A bar timestamped Sunday 22:00 UTC (= Sun 18:00 EDT) rolls into
+ * Monday's daily candle instead of a stub Sunday bar.
  */
-export function resampleCandles(source: RawCandle[], targetTf: Timeframe): RawCandle[] {
+export function resampleCandles(
+  source: RawCandle[],
+  targetTf: Timeframe,
+  boundaryTz: string = 'America/New_York',
+  boundaryHour: number = 17,
+): RawCandle[] {
   if (source.length === 0) return [];
 
   const targetMs = TIMEFRAME_MINUTES[targetTf] * 60_000;
 
+  // Trading-day (calendar) start at `boundaryHour` in `boundaryTz`, returned
+  // as midnight UTC of that trading day so the bar label matches TV / MT5.
+  const forexTradingDayStartMs = (ts: number): number => {
+    const local = toZonedTime(new Date(ts), boundaryTz);
+    // toZonedTime returns a "fake local" date whose *displayed* fields are
+    // the wall-clock values in boundaryTz — read them via the local getters.
+    let y = local.getFullYear();
+    let m = local.getMonth();
+    let d = local.getDate();
+    if (local.getHours() >= boundaryHour) {
+      // Shift to next calendar day.
+      const next = new Date(Date.UTC(y, m, d + 1));
+      y = next.getUTCFullYear();
+      m = next.getUTCMonth();
+      d = next.getUTCDate();
+    }
+    return Date.UTC(y, m, d);
+  };
+
   const getBucketStart = (ts: number): number => {
+    if (targetTf === '1d') {
+      return forexTradingDayStartMs(ts);
+    }
     if (targetTf === '1w') {
-      // ISO week starts Monday UTC
-      const d = new Date(ts);
-      const day = d.getUTCDay(); // 0=Sun, 1=Mon ... 6=Sat
-      const daysFromMonday = (day + 6) % 7;
-      const mondayMs = ts - daysFromMonday * 86_400_000;
-      // Floor to midnight UTC of that Monday
-      const mondayDate = new Date(mondayMs);
-      return Date.UTC(mondayDate.getUTCFullYear(), mondayDate.getUTCMonth(), mondayDate.getUTCDate());
+      // Monday of the trading week.
+      const dayStart = forexTradingDayStartMs(ts);
+      const d = new Date(dayStart);
+      const dow = d.getUTCDay(); // 0=Sun..6=Sat  (dayStart is already 00:00 UTC)
+      const daysFromMonday = (dow + 6) % 7;
+      const monday = new Date(dayStart - daysFromMonday * 86_400_000);
+      return Date.UTC(monday.getUTCFullYear(), monday.getUTCMonth(), monday.getUTCDate());
     }
     if (targetTf === '1M') {
       const d = new Date(ts);
