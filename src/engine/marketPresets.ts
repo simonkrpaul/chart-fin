@@ -26,15 +26,16 @@ export interface MarketPreset {
   suggestedSymbols: string[];
 }
 
-/** Crypto – 24/7, all timestamps in UTC, no session breaks. */
+/** Crypto – 24/7, no session breaks. Display tz defaults to NY to match
+ *  the chart's forex/futures convention; underlying data is UTC. */
 const CRYPTO: MarketPreset = {
   id: 'crypto',
-  label: 'Crypto (24/7 UTC)',
+  label: 'Crypto (24/7)',
   kind: 'crypto',
   continuous: true,
-  timezone: 'UTC',
+  timezone: 'America/New_York',
   session: {
-    timezone: 'UTC',
+    timezone: 'America/New_York',
     regularOpen: '00:00',
     regularClose: '23:59',
     tradingDays: [1, 2, 3, 4, 5, 6, 7],
@@ -97,15 +98,18 @@ const US_FUTURES: MarketPreset = {
   suggestedSymbols: ['NQ', 'ES', 'CL', 'GC'],
 };
 
-/** Forex – Sunday 22:00 UTC → Friday 22:00 UTC continuous. */
+/** Forex – Sunday 17:00 NY → Friday 17:00 NY continuous. */
 const FOREX: MarketPreset = {
   id: 'forex',
   label: 'Forex (FX week)',
   kind: 'forex',
   continuous: false,
-  timezone: 'UTC',
+  timezone: 'America/New_York',
   session: {
-    timezone: 'UTC',
+    // NY tz matches the forex trading-day convention (TradingView / MT5
+    // / CME all anchor the daily bar at 17:00 NY). Users can override via
+    // the toolbar's Timezone selector.
+    timezone: 'America/New_York',
     regularOpen: '00:00',
     regularClose: '23:59',
     // Mon-Fri only. Both Saturday and Sunday render as weekend spacers
