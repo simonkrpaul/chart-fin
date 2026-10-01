@@ -214,17 +214,27 @@ def _fetch_bars(
     seeding from those files.
 
     • from_ts_ms=None  → last `bar_count` bars from now (initial sync).
-    • from_ts_ms=N     → every bar from N through now, capped at `bar_count`.
-      N is UTC; it's converted to broker-local for the MT5 call.
+    • from_ts_ms=N     → every bar from N through now (uses copy_rates_range).
+      N is UTC; it's converted to broker-local for the MT5 call. `bar_count`
+      is ignored for the range fetch — the broker returns everything in
+      [N, now] regardless.
     """
     mt5 = _load_mt5()
     tf_const = _tf_map(mt5)[tf_code]
     if from_ts_ms is None:
         rates = mt5.copy_rates_from_pos(mt5_symbol, tf_const, 0, bar_count)
     else:
-        utc_dt = datetime.fromtimestamp(from_ts_ms / 1000, tz=timezone.utc)
-        broker_naive = utc_dt.astimezone(broker_tz).replace(tzinfo=None)
-        rates = mt5.copy_rates_from(mt5_symbol, tf_const, broker_naive, bar_count)
+        utc_from = datetime.fromtimestamp(from_ts_ms / 1000, tz=timezone.utc)
+        utc_to   = datetime.now(tz=timezone.utc)
+        # MT5 wants naive broker-local datetimes.
+        broker_from = utc_from.astimezone(broker_tz).replace(tzinfo=None)
+        broker_to   = utc_to.astimezone(broker_tz).replace(tzinfo=None)
+        # NB: copy_rates_from(date, count) fetches `count` bars *ending at*
+        # `date` going BACKWARD — not forward from `date` to now. That's why
+        # gap-fill used to return 0 new bars: it kept pulling old history.
+        # copy_rates_range(from, to) is the right call for "everything since
+        # last_ts".
+        rates = mt5.copy_rates_range(mt5_symbol, tf_const, broker_from, broker_to)
     if rates is None or len(rates) == 0:
         print(f"[mt5_sync]   {tf_code:>4}  no bars returned ({mt5.last_error()})", file=sys.stderr)
         return []
@@ -232,7 +242,7 @@ def _fetch_bars(
     for r in rates:
         # Reinterpret the "epoch seconds" value as a naive broker-local
         # datetime, attach broker_tz, convert to true UTC.
-        broker_naive = datetime.utcfromtimestamp(int(r["time"]))
+        broker_naive = datetime.fromtimestamp(int(r["time"]), tz=timezone.utc).replace(tzinfo=None)
         aware_broker = broker_naive.replace(tzinfo=broker_tz)
         ts_ms = int(aware_broker.astimezone(timezone.utc).timestamp() * 1000)
         # tick_volume for FX; real_volume is often 0 on demo accounts.
