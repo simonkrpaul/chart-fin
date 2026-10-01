@@ -575,9 +575,38 @@ For environments where `git push` is blocked by corporate proxy / DLP scanners a
 
 - [ARCHITECTURE.md](ARCHITECTURE.md) — module map & data-flow diagrams.
 - [MIGRATION.md](MIGRATION.md) — feature-by-feature engineering log.
-- [docs/data-ingestion.md](docs/data-ingestion.md) — Bybit / Alpaca / Kaggle ingestion cookbook.
+- [docs/data-ingestion.md](docs/data-ingestion.md) — Bybit / Alpaca / Kaggle ingestion cookbook + full troubleshooting section.
 - [docs/patch-round-trip.md](docs/patch-round-trip.md) — corporate-safe commit transport.
 
+## Troubleshooting
+
+### The tab is crashing / the picker is empty / data loads hang forever
+
+Classic signs of a corrupted browser state after an earlier OOM crash. Chrome keeps the V8 heap and IndexedDB connection alive across *refreshes* but not across a full tab close — so once a crash happens, subsequent actions in that same tab often tip the browser over again. Reset cleanly:
+
+1. **Close every chart-fin tab entirely** (⌘W / Ctrl-W). A page refresh is not enough — the browser needs the V8 heap and the IndexedDB connection to go away. Closing all tabs also frees any held upgrade lock on the IndexedDB.
+2. **Clear site data.** Open a fresh tab, type `chrome://settings/content/all` in the URL bar, search for your dev host (e.g. `localhost:5173`), and click the trash. This wipes IndexedDB + localStorage + cache for the site in one shot.
+   - Faster alternative: open DevTools **before** navigating to the app → **Application** tab → **Storage** panel → **Clear site data** button at the top.
+3. **Open the app in a fresh tab** with DevTools **Console open** before clicking anything. Hard refresh (⇧⌘R / Ctrl-Shift-R) once the page loads.
+4. **Open the chart picker.** You should see `[ChartPicker] loaded N markets · M symbols` in the console within ~500 ms.
+5. **Load a conservative series first** to confirm everything works: `crypto → BTCUSDT → 1d → Open`. The console should log `[openSeries] loaded {rows: ..., ms: '~500'}`.
+6. Only after step 5 succeeds should you load heavier series (5 m / 1 m, multi-year windows).
+
+The app has defensive timeouts for IndexedDB open and read failures so it will *eventually* recover without this procedure — but on an already-crashed tab, the fastest path is a hard reset.
+
+**Watch the depth selector.** For intraday timeframes avoid "All history" when the underlying file is large:
+
+| TF | Safe "All" | Risky |
+| --- | --- | --- |
+| 1 d / 1 w / 1 M | ✓ always safe | — |
+| 4 h / 1 h | ✓ safe | — |
+| 15 m | ✓ typically safe | — |
+| 5 m | ⚠ ~1.5 M bars for BTC — OK on 16 GB machines | — |
+| 1 m | ❌ ~7.7 M bars for BTC = ~770 MB in RAM | **Pick "Last 5 years" or less** |
+
+The picker shows a yellow warning when the computed bar count exceeds 500 k. Trust it.
+
+For picker-level issues (symbol not advertised, chart loads empty, "Rescan disk" doesn't pick up new data, etc.), see the full **Troubleshooting** section in [docs/data-ingestion.md](docs/data-ingestion.md#troubleshooting-no-candles-in-db-and-friends).
 
 ## React Compiler
 

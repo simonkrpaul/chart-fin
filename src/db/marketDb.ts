@@ -1,7 +1,7 @@
 /**
  * marketDb.ts
  * ─────────────────────────────────────────────────────────────────────────────
- * High-level facade over `marketStore` (IndexedDB) and `duckdb` (WASM SQL).
+ * High-level facade over `marketStore` (IndexedDB) + CSV manifest fallback.
  *
  * Public surface:
  *   • ensureMarkets()              – seeds preset markets into the DB
@@ -10,7 +10,6 @@
  *   • loadCandlesBefore()          – lazy backfill on pan-left
  *   • saveCandlesForSeries()       – used by uploads / API pulls
  *   • listMarketsWithCounts()      – for the picker UI
- *   • invalidateAnalyticalCache()  – DuckDB cache reset after writes
  *
  * The manifest is a static JSON file shipped in `public/data/markets/` that
  * lists every CSV bundled with the app. Python scripts (`import_market.py`,
@@ -23,7 +22,7 @@ import { MARKET_PRESET_LIST, getMarketPreset } from '../engine/marketPresets';
 import { canResample, resampleCandles, filterBySessionHours } from '../engine/resampleEngine';
 import { TIMEFRAME_MINUTES } from '../engine/calendarEngine';
 import * as store from './marketStore';
-import { invalidateSeries, queryCandles } from './duckdb';
+import { getCandles as queryCandles } from './marketStore';
 
 const MANIFEST_URL_DEFAULT = '/data/markets/manifest.json';
 const INITIAL_BAR_COUNT = 2000;
@@ -88,7 +87,13 @@ async function _fetchManifest(url: string): Promise<Manifest | null> {
  * to invalidate.
  */
 export async function getManifest(url: string = MANIFEST_URL_DEFAULT): Promise<Manifest | null> {
-  if (_manifestPromise) return _manifestPromise;
+  if (_manifestPromise) {
+    const cached = await _manifestPromise;
+    // If a prior boot-time call cached a null (e.g. Vite not yet ready /
+    // transient 404), don't keep returning null forever — re-fetch.
+    if (cached) return cached;
+    _manifestPromise = null;
+  }
   _manifestPromise = _fetchManifest(url).then(m => {
     if (m) {
       _manifestByKey = new Map(
@@ -251,7 +256,6 @@ async function _ingestManifestImpl(
         baseTimeframe: src.timeframe,
       });
       await store.saveCandles(src.market, src.symbol, src.timeframe, toWrite);
-      invalidateSeries(src.market, src.symbol, src.timeframe);
       ingested.push(src);
     } catch {
       // Best-effort — skip unreadable source and move on.
@@ -312,39 +316,50 @@ function pickSourceTimeframe(
 }
 
 /**
- * Fetch a single series' CSV straight off disk, parse, and return candles.
- * Never touches IndexedDB. Used as the reliable fallback whenever the DB
- * cache is empty or stale.
+ * Fetch a CSV and parse it fully (keep every row). Streams the response
+ * body line-by-line so we never buffer the whole text as a 300 MB+ JS
+ * string. The parsed candle array itself is still big (~800 MB for a
+ * 7 M-row 1m file) — if memory matters, call `_fetchCsvCandlesTail`
+ * with a bounded `maxRows` instead.
  */
 async function _fetchCsvCandles(url: string): Promise<RawCandle[]> {
-  const resp = await fetch(url);
-  if (!resp.ok) throw new Error(`HTTP ${resp.status} fetching ${url}`);
-  const text = await resp.text();
-  const filename = url.split('/').pop() ?? 'data.csv';
-  const file = new File([text], filename, { type: 'text/csv' });
-  const { candles } = await parseOHLCVFile(file);
-  return candles;
+  return _streamCsvCandles(url, { maxRows: Infinity });
+}
+
+async function _fetchCsvCandlesTail(url: string, maxRows: number): Promise<RawCandle[]> {
+  return _streamCsvCandles(url, { maxRows });
 }
 
 /**
- * Stream a CSV and keep only the last `maxRows` candles. Prevents OOM on
- * ~300 MB / 7 M-row files (XAUUSD 1m) when the caller only needs the tail.
+ * One streaming CSV parser used by both the full-load and tail-load paths.
+ * When `opts.maxRows` is finite, a ring buffer keeps only the newest N rows.
+ * When Infinity, every row is appended to an unbounded array.
+ *
  * Assumes the canonical schema (`timestamp,open,high,low,close,volume`
  * with Unix ms UTC timestamps). Falls back to a comma delimiter if the
  * header uses a different one.
  */
-async function _fetchCsvCandlesTail(url: string, maxRows: number): Promise<RawCandle[]> {
+async function _streamCsvCandles(
+  url: string,
+  opts: { maxRows: number },
+): Promise<RawCandle[]> {
+  const { maxRows } = opts;
   const resp = await fetch(url);
   if (!resp.ok) throw new Error(`HTTP ${resp.status} fetching ${url}`);
   if (!resp.body) {
-    // No streaming support — fall back to buffered parse and trim.
-    const all = await _fetchCsvCandles(url);
-    return all.slice(Math.max(0, all.length - maxRows));
+    // No streaming support — buffered fetch is the only option.
+    const text = await resp.text();
+    const filename = url.split('/').pop() ?? 'data.csv';
+    const file = new File([text], filename, { type: 'text/csv' });
+    const { candles } = await parseOHLCVFile(file);
+    return isFinite(maxRows) ? candles.slice(Math.max(0, candles.length - maxRows)) : candles;
   }
 
   const reader = resp.body.getReader();
   const decoder = new TextDecoder();
-  const ring: (RawCandle | null)[] = new Array(maxRows).fill(null);
+  const bounded = isFinite(maxRows);
+  const ring: (RawCandle | null)[] | null = bounded ? new Array(maxRows).fill(null) : null;
+  const unbounded: RawCandle[] | null = bounded ? null : [];
   let head = 0;
   let filled = 0;
 
@@ -390,32 +405,47 @@ async function _fetchCsvCandlesTail(url: string, maxRows: number): Promise<RawCa
     if (isNaN(open) || isNaN(high) || isNaN(low) || isNaN(close)) return;
     const volume = vCol >= 0 && cells[vCol] ? parseFloat(cells[vCol]) || 0 : 0;
 
-    ring[head] = { timestamp: ts, open, high, low, close, volume };
-    head = (head + 1) % maxRows;
-    if (filled < maxRows) filled++;
+    const candle: RawCandle = { timestamp: ts, open, high, low, close, volume };
+    if (unbounded !== null) {
+      unbounded.push(candle);
+    } else {
+      ring![head] = candle;
+      head = (head + 1) % maxRows;
+      if (filled < maxRows) filled++;
+    }
   };
 
   while (true) {
     const { done, value } = await reader.read();
     if (done) break;
     buf += decoder.decode(value, { stream: true });
-    let idx = buf.indexOf('\n');
+
+    // Walk the chunk with a cursor instead of re-slicing `buf` per line.
+    // The old `buf = buf.slice(idx + 1)` on every iteration copied the full
+    // remaining buffer for each line — O(N²) in chunk size and the direct
+    // cause of OOM crashes on multi-year streaming parses.
+    let start = 0;
+    let idx = buf.indexOf('\n', start);
     while (idx >= 0) {
-      const line = buf.slice(0, idx).replace(/\r$/, '');
-      if (line) acceptLine(line);
-      buf = buf.slice(idx + 1);
-      idx = buf.indexOf('\n');
+      // Trim a trailing \r by narrowing the end instead of allocating a new string.
+      const end = idx > start && buf.charCodeAt(idx - 1) === 13 ? idx - 1 : idx;
+      if (end > start) acceptLine(buf.substring(start, end));
+      start = idx + 1;
+      idx = buf.indexOf('\n', start);
     }
+    // Keep only the unconsumed tail (one slice per chunk, not per line).
+    buf = start < buf.length ? buf.substring(start) : '';
   }
   // Flush any trailing partial line (last row without newline).
   const last = buf.trim();
   if (last) acceptLine(last);
 
-  // Materialize the ring in chronological order.
+  // Materialize the result.
+  if (unbounded !== null) return unbounded;
   const out: RawCandle[] = new Array(filled);
   const start = filled < maxRows ? 0 : head;
   for (let i = 0; i < filled; i++) {
-    out[i] = ring[(start + i) % maxRows]!;
+    out[i] = ring![(start + i) % maxRows]!;
   }
   return out;
 }
@@ -439,7 +469,6 @@ function _writebackCandles(
         baseTimeframe: timeframe,
       });
       await store.saveCandles(market, symbol, timeframe, candles);
-      invalidateSeries(market, symbol, timeframe);
     } catch (err) {
       // eslint-disable-next-line no-console
       console.warn(`[marketDb] writeback for ${market}/${symbol}@${timeframe} failed`, err);
@@ -489,7 +518,17 @@ export async function loadInitialCandles(
   const loadAll = !Number.isFinite(count);
 
   // ── Fast path: IndexedDB cache hit ────────────────────────────────────
-  const sym = await store.getSymbol(market, symbol);
+  // All IDB calls are wrapped in try/catch: a broken IDB (hung openDB,
+  // aborted transaction after a tab OOM crash, etc.) must never block
+  // the chart from loading — we just fall through to CSV.
+  let sym: store.SymbolRecord | undefined;
+  try {
+    sym = await store.getSymbol(market, symbol);
+  } catch (err) {
+    // eslint-disable-next-line no-console
+    console.warn(`[loadInitialCandles] IDB getSymbol(${market}, ${symbol}) failed — falling through to CSV`, err);
+    sym = undefined;
+  }
   const available = sym?.availableTimeframes ?? [];
   const dbSourceTf = pickSourceTimeframe(timeframe, available);
   if (dbSourceTf) {
@@ -497,11 +536,17 @@ export async function loadInitialCandles(
     const rawLimit = loadAll
       ? undefined
       : dbSourceTf === timeframe ? count : Math.ceil(count * ratio);
-    const rows = await queryCandles({
-      market, symbol, timeframe: dbSourceTf,
-      limit: rawLimit,
-      direction: 'desc',
-    });
+    let rows: RawCandle[] = [];
+    try {
+      rows = await queryCandles({
+        market, symbol, timeframe: dbSourceTf,
+        limit: rawLimit,
+        direction: 'desc',
+      });
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.warn(`[loadInitialCandles] IDB queryCandles failed — falling through to CSV`, err);
+    }
     if (rows.length > 0) {
       const filtered = preset ? filterBySessionHours(rows, preset.session, dbSourceTf) : rows;
       const candles = dbSourceTf === timeframe ? filtered : resampleCandles(filtered, timeframe);
@@ -627,7 +672,6 @@ export async function saveCandlesForSeries(
     baseTimeframe: timeframe,
   });
   await store.saveCandles(market, symbol, timeframe, candles, onProgress);
-  invalidateSeries(market, symbol, timeframe);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -716,9 +760,24 @@ export interface PickerMarket {
 export async function listMarketsForPicker(
   manifestUrl: string = MANIFEST_URL_DEFAULT,
 ): Promise<PickerMarket[]> {
-  // Cache the URL-driven manifest fetch in the module-level cache too.
   const manifest = await getManifest(manifestUrl);
-  const dbMarkets = await listMarketsWithSymbols();
+
+  // IndexedDB is used to mark which series are already cached. If IDB
+  // itself is in a bad state (e.g. aborted transaction after a tab OOM
+  // crash), treat the cache as empty and render the picker purely from
+  // the manifest + preset list. Users can still click any series to load
+  // it from CSV; symbols just won't show the "ready" badge.
+  let dbMarkets: MarketWithSymbols[];
+  try {
+    dbMarkets = await listMarketsWithSymbols();
+  } catch (err) {
+    // eslint-disable-next-line no-console
+    console.warn('[listMarketsForPicker] IDB unavailable, falling back to manifest only', err);
+    dbMarkets = MARKET_PRESET_LIST.map(p => ({
+      id: p.id, label: p.label, continuous: p.continuous,
+      timezone: p.timezone, symbols: [],
+    }));
+  }
 
   // Start with every preset market present, empty symbol list.
   const byId = new Map<string, PickerMarket>(
@@ -821,7 +880,6 @@ export async function ingestOne(src: ManifestSource, opts: { force?: boolean } =
     baseTimeframe: src.timeframe,
   });
   await store.saveCandles(src.market, src.symbol, src.timeframe, toWrite);
-  invalidateSeries(src.market, src.symbol, src.timeframe);
   return toWrite.length;
 }
 

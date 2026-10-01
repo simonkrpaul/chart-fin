@@ -52,17 +52,7 @@ function scheduleSave(): void {
 // Default sample data (used when nothing is persisted)
 // ─────────────────────────────────────────────────────────────────────────────
 
-const DEFAULT_INDICATORS: IndicatorConfig[] = [
-  {
-    id: 'ema-50',
-    type: 'EMA',
-    params: { period: 50 },
-    color: '#ff9800',
-    lineWidth: 1.5,
-    visible: true,
-    pane: 'main',
-  },
-];
+const DEFAULT_INDICATORS: IndicatorConfig[] = [];
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Hook
