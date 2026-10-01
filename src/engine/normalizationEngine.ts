@@ -39,7 +39,13 @@ function buildPeriodIndex(
 }
 
 /**
- * Merge raw candles into a slot array (mutates a copy – original is unchanged).
+ * Merge raw candles into a slot array.
+ *
+ * Mutates `slots` in place: all our callers (`loadCandles`, `setTimeframe`,
+ * `prependCandles`, chartWorker) throw away the input array immediately
+ * after this call, so the previous deep-copy was pure allocation overhead
+ * — ~1 M wasted slot objects on a 500 k-bar load, enough to trigger GC
+ * pauses and OOM crashes.
  *
  * For intraday timeframes: exact timestamp matching.
  * For D/W/M timeframes: calendar-period matching (UTC day / ISO week / month)
@@ -50,29 +56,26 @@ export function normalizeCandles(
   raw: RawCandle[],
   timeframe?: Timeframe,
 ): CandleSlot[] {
-  // Deep-clone slots so we don't mutate the source
-  const result: CandleSlot[] = slots.map(s => ({ ...s, candle: s.candle }));
-
   if (timeframe === '1d' || timeframe === '1w' || timeframe === '1M') {
     const periodFn = timeframe === '1d' ? utcDateStr
                    : timeframe === '1w' ? utcWeekStr
                    : utcMonthStr;
-    const periodIndex = buildPeriodIndex(result, periodFn);
+    const periodIndex = buildPeriodIndex(slots, periodFn);
     for (const candle of raw) {
       const si = periodIndex.get(periodFn(candle.timestamp));
       if (si === undefined) continue;
-      result[si] = { ...result[si], candle };
+      slots[si].candle = candle;
     }
   } else {
-    const index = buildTimestampIndex(result);
+    const index = buildTimestampIndex(slots);
     for (const candle of raw) {
       const si = index.get(candle.timestamp);
       if (si === undefined) continue;
-      result[si] = { ...result[si], candle };
+      slots[si].candle = candle;
     }
   }
 
-  return result;
+  return slots;
 }
 
 /**

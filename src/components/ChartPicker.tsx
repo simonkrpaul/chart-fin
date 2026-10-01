@@ -18,11 +18,19 @@ import {
   selectableTimeframes,
   type PickerMarket,
 } from '../db/marketDb';
-import { listLayoutsDb } from '../db/marketStore';
+import { listLayoutsDb, clearCandleCache } from '../db/marketStore';
 import { openSeries, openLayout, setDefaultLayout, getDefaultLayoutId } from '../store/chartSession';
 import type { ChartLayout, Timeframe } from '../types';
 import { TIMEFRAME_MINUTES } from '../engine/calendarEngine';
+import { MARKET_PRESET_LIST } from '../engine/marketPresets';
 import { IngestionPanel } from './IngestionPanel';
+
+// Seed the picker synchronously with preset markets so the dropdown is
+// never empty — even if the async manifest/IDB load fails outright.
+const PRESET_MARKETS: PickerMarket[] = MARKET_PRESET_LIST.map(p => ({
+  id: p.id, label: p.label, continuous: p.continuous,
+  timezone: p.timezone, symbols: [],
+}));
 
 // History-depth options, days each. `null` = load everything the DB has.
 interface DepthOption { label: string; days: number | null; }
@@ -79,7 +87,7 @@ export const ChartPicker: React.FC = () => {
   const { theme } = useChartStore();
   const [open, setOpen]         = useState(false);
   const [ingestOpen, setIngest] = useState(false);
-  const [markets, setMarkets]   = useState<PickerMarket[]>([]);
+  const [markets, setMarkets]   = useState<PickerMarket[]>(PRESET_MARKETS);
   const [layouts, setLayouts]   = useState<ChartLayout[]>([]);
   const [defaultId, setDefaultId] = useState<string | undefined>(undefined);
   const [marketId, setMarketId] = useState<string>('forex');
@@ -96,20 +104,40 @@ export const ChartPicker: React.FC = () => {
   const accent = '#2962ff';
 
   const refresh = useCallback(async () => {
-    const [m, l, d] = await Promise.all([
-      listMarketsForPicker(),
-      listLayoutsDb(),
-      getDefaultLayoutId(),
-    ]);
-    setMarkets(m);
-    setLayouts(l);
-    setDefaultId(d);
+    try {
+      const [m, l, d] = await Promise.all([
+        listMarketsForPicker().catch(err => {
+          // eslint-disable-next-line no-console
+          console.error('[ChartPicker] listMarketsForPicker failed', err);
+          return PRESET_MARKETS;
+        }),
+        listLayoutsDb().catch(() => []),
+        getDefaultLayoutId().catch(() => undefined),
+      ]);
+      // Merge: ensure every preset market is present even if the async
+      // loader somehow forgot one. Preserves symbols loaded from manifest.
+      const byId = new Map(PRESET_MARKETS.map(p => [p.id, p]));
+      for (const mkt of m) byId.set(mkt.id, mkt);
+      const merged = Array.from(byId.values());
+      const totalSymbols = merged.reduce((n, mk) => n + mk.symbols.length, 0);
+      // eslint-disable-next-line no-console
+      console.info(`[ChartPicker] loaded ${merged.length} markets · ${totalSymbols} symbols`);
+      setMarkets(merged);
+      setLayouts(l);
+      setDefaultId(d);
+    } catch (err) {
+      // Never leave the dropdown empty — keep whatever we have.
+      // eslint-disable-next-line no-console
+      console.error('[ChartPicker] refresh failed', err);
+    }
   }, []);
 
   useEffect(() => {
     if (!open) return;
     (async () => {
-      await ensureMarkets();
+      try { await ensureMarkets(); } catch (e) {
+        console.warn('[ChartPicker] ensureMarkets failed; continuing with manifest only', e);
+      }
       await refresh();
     })();
   }, [open, refresh]);
@@ -210,10 +238,16 @@ export const ChartPicker: React.FC = () => {
   }, []);
 
   const handleRescan = useCallback(async () => {
-    setStatus('Refreshing symbol list from manifest…');
+    setStatus('Clearing IDB cache + re-reading manifest…');
+    try {
+      await clearCandleCache();
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.warn('[ChartPicker] clearCandleCache failed', err);
+    }
     refreshManifest();  // Drop the cached manifest so next call re-fetches.
     await refresh();
-    setStatus('Symbol list refreshed. Pick a symbol to load it.');
+    setStatus('Cache cleared. Next symbol open will re-read from CSV.');
   }, [refresh]);
 
   const handleTogglePin = useCallback(async (e: React.MouseEvent, layout: ChartLayout) => {
@@ -386,10 +420,21 @@ export const ChartPicker: React.FC = () => {
                 </select>
                 {(() => {
                   const bars = depthToBarCount(tf, depthDays);
+                  const barsLabel = bars === Infinity ? 'All available' : `${bars.toLocaleString()}`;
+                  // Hard limit matches the openSeries guard: beyond ~1.5M slots
+                  // the session-aware grid in generateIntradaySlots balloons
+                  // past V8's heap and the tab OOMs.
+                  if (bars > 1_500_000) {
+                    return (
+                      <div style={{ fontSize: 10, color: '#f44336', marginBottom: 6 }}>
+                        ✗ {barsLabel} bars will likely crash the tab at this timeframe. Pick a shorter window or a coarser TF.
+                      </div>
+                    );
+                  }
                   if (bars > 500_000) {
                     return (
                       <div style={{ fontSize: 10, color: '#ff9800', marginBottom: 6 }}>
-                        ⚠ {bars.toLocaleString()} bars may slow the browser. Consider a shorter window.
+                        ⚠ {barsLabel} bars may slow the browser. Consider a shorter window.
                       </div>
                     );
                   }

@@ -10,6 +10,7 @@
 import { primaryChartStore } from '../store/chartStore';
 import { loadInitialCandles, presetFor } from '../db/marketDb';
 import { getLayoutDb, setSetting, getSetting } from '../db/marketStore';
+import { TIMEFRAME_MINUTES, INTRADAY_TIMEFRAMES } from '../engine/calendarEngine';
 import type { ChartLayout, Timeframe } from '../types';
 
 const KEY_LAST_OPEN = 'lastOpen';
@@ -84,9 +85,50 @@ export async function openSeries(
     const store = primaryChartStore.getState();
     const preset = presetFor(market);
     if (preset) store.setSession(preset.session);
-    store.setTimeframe(tf);
-    store.loadCandles(candles, candles[0].timestamp, candles[candles.length - 1].timestamp);
-    store.setCurrentSeries({ market, symbol, timeframe: tf });
+    // Set the timeframe field directly instead of calling `setTimeframe()`,
+    // which would rebuild the slot grid from the *previously-loaded* data
+    // at the new TF — e.g. switching from XAUUSD 1d → 5m would generate
+    // 525k empty 5m slots over a 5y span before loadCandles even runs.
+    primaryChartStore.setState(state => { state.timeframe = tf; });
+
+    // Safety guard: generateIntradaySlots fills every 5-min bucket of every
+    // calendar day in the span (24h × 7d, session-independent) — a 22-year
+    // XAUUSD 5m file balloons to ~2.4M slots × ~90 B each ≈ 220 MB *before*
+    // we touch indicators. Bail out with a user-visible hint instead of
+    // OOM-crashing the tab.
+    const first = candles[0].timestamp;
+    const last = candles[candles.length - 1].timestamp;
+    const tfMs = TIMEFRAME_MINUTES[tf] * 60_000;
+    const estSlots = Math.ceil((last - first) / tfMs);
+    const SLOT_LIMIT = 1_500_000;
+    if (INTRADAY_TIMEFRAMES.includes(tf) && estSlots > SLOT_LIMIT) {
+      const years = ((last - first) / (365.25 * 86_400_000)).toFixed(1);
+      const safeDays = Math.floor((SLOT_LIMIT * TIMEFRAME_MINUTES[tf]) / (24 * 60));
+      return {
+        ok: false, rows: 0,
+        message: `${market}/${symbol} @ ${tf} spans ${years} years (~${estSlots.toLocaleString()} slots). Loading full history at this timeframe would crash the tab. In the picker, set "History depth" below ~${safeDays.toLocaleString()} days, or switch to a coarser timeframe.`,
+      };
+    }
+
+    try {
+      store.loadCandles(candles, candles[0].timestamp, candles[candles.length - 1].timestamp);
+      store.setCurrentSeries({ market, symbol, timeframe: tf });
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.error('[openSeries] store.loadCandles threw', err);
+      return {
+        ok: false, rows: 0,
+        message: `Internal error applying ${market}/${symbol}@${tf} to chart: ${(err as Error).message}`,
+      };
+    }
+
+    // eslint-disable-next-line no-console
+    console.info('[openSeries] applied to store', {
+      market, symbol, tf,
+      slots: primaryChartStore.getState().primarySlots.length,
+      viewportFirst: primaryChartStore.getState().viewport.firstSlotIndex,
+      viewportCount: primaryChartStore.getState().viewport.visibleSlotCount,
+    });
 
     await setSetting(KEY_LAST_OPEN, {
       kind: 'series', market, symbol, timeframe: tf, savedAt: Date.now(),
@@ -125,7 +167,8 @@ export async function openLayout(layout: ChartLayout): Promise<OpenResult> {
     if (res.candles.length > 0) {
       const preset = presetFor(layout.series.market);
       if (preset) store.setSession(preset.session);
-      store.setTimeframe(layout.series.timeframe);
+      // Direct field update — see openSeries for rationale.
+      primaryChartStore.setState(state => { state.timeframe = layout.series!.timeframe; });
       store.loadCandles(res.candles, res.candles[0].timestamp, res.candles[res.candles.length - 1].timestamp);
       store.setCurrentSeries({
         market: layout.series.market,

@@ -3,14 +3,10 @@
  * ─────────────────────────────────────────────────────────────────────────────
  * IndexedDB-backed persistent store for multi-market OHLCV + chart layouts.
  *
- * Why IndexedDB (via `idb`) rather than a full DuckDB-WASM database file?
+ * Why IndexedDB (via `idb`)?
  *   • Guaranteed cross-browser support with no WASM init overhead
  *   • Composite indexes make range queries millisecond-fast (2000 bars ≈ 3 ms)
  *   • Storage limits are generous (tens of GB in modern browsers)
- *
- * DuckDB WASM is layered on top in `./duckdb.ts` as an optional SQL query
- * engine. It hydrates from this IndexedDB store on demand for heavy analytics
- * but is not required for chart display.
  *
  * ── Object stores ────────────────────────────────────────────────────────────
  *   markets   – market metadata (id, label, kind, timezone, continuous)
@@ -131,33 +127,75 @@ interface ChartFinDB extends DBSchema {
 
 let _dbPromise: Promise<IDBPDatabase<ChartFinDB>> | null = null;
 
+/** Reject if `p` doesn't settle within `ms`. Used to prevent IDB from
+ *  hanging the whole app when the browser's IDB subsystem is stuck
+ *  (held upgrade lock, aborted-transaction state, etc.). */
+function withTimeout<T>(p: Promise<T>, ms: number, tag: string): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(`[marketStore] ${tag} timed out after ${ms}ms`)), ms);
+    p.then(v => { clearTimeout(timer); resolve(v); },
+           e => { clearTimeout(timer); reject(e); });
+  });
+}
+
 export function getDB(): Promise<IDBPDatabase<ChartFinDB>> {
   if (_dbPromise) return _dbPromise;
-  _dbPromise = openDB<ChartFinDB>(DB_NAME, DB_VERSION, {
-    upgrade(db) {
-      if (!db.objectStoreNames.contains('markets')) {
-        db.createObjectStore('markets', { keyPath: 'id' });
-      }
-      if (!db.objectStoreNames.contains('symbols')) {
-        const s = db.createObjectStore('symbols', { keyPath: ['market', 'symbol'] });
-        s.createIndex('by-market', 'market');
-      }
-      if (!db.objectStoreNames.contains('ohlcv')) {
-        const o = db.createObjectStore('ohlcv', {
-          keyPath: ['market', 'symbol', 'timeframe', 'timestamp'],
-        });
-        // Range queries: WHERE market=? AND symbol=? AND tf=? AND ts BETWEEN ? AND ?
-        o.createIndex('by-series-ts', ['market', 'symbol', 'timeframe', 'timestamp']);
-      }
-      if (!db.objectStoreNames.contains('layouts')) {
-        const l = db.createObjectStore('layouts', { keyPath: 'id' });
-        l.createIndex('by-name', 'name', { unique: true });
-        l.createIndex('by-updated', 'updatedAt');
-      }
-      if (!db.objectStoreNames.contains('settings')) {
-        db.createObjectStore('settings', { keyPath: 'key' });
-      }
-    },
+  _dbPromise = withTimeout(
+    openDB<ChartFinDB>(DB_NAME, DB_VERSION, {
+      upgrade(db) {
+        if (!db.objectStoreNames.contains('markets')) {
+          db.createObjectStore('markets', { keyPath: 'id' });
+        }
+        if (!db.objectStoreNames.contains('symbols')) {
+          const s = db.createObjectStore('symbols', { keyPath: ['market', 'symbol'] });
+          s.createIndex('by-market', 'market');
+        }
+        if (!db.objectStoreNames.contains('ohlcv')) {
+          const o = db.createObjectStore('ohlcv', {
+            keyPath: ['market', 'symbol', 'timeframe', 'timestamp'],
+          });
+          // Range queries: WHERE market=? AND symbol=? AND tf=? AND ts BETWEEN ? AND ?
+          o.createIndex('by-series-ts', ['market', 'symbol', 'timeframe', 'timestamp']);
+        }
+        if (!db.objectStoreNames.contains('layouts')) {
+          const l = db.createObjectStore('layouts', { keyPath: 'id' });
+          l.createIndex('by-name', 'name', { unique: true });
+          l.createIndex('by-updated', 'updatedAt');
+        }
+        if (!db.objectStoreNames.contains('settings')) {
+          db.createObjectStore('settings', { keyPath: 'key' });
+        }
+      },
+      // Fires if another tab holds an older-version connection open and
+      // blocks our upgrade. Logging + letting the timeout take over is
+      // better than silently waiting forever.
+      blocked() {
+        // eslint-disable-next-line no-console
+        console.warn('[marketStore] IDB open blocked — another tab is holding an older version. Close other tabs or hard-refresh.');
+      },
+      // Fires when WE hold an older version while a newer tab tries to
+      // upgrade. Drop our handle so the other tab can proceed.
+      blocking() {
+        // eslint-disable-next-line no-console
+        console.warn('[marketStore] IDB connection blocking another tab — closing.');
+        _dbPromise?.then(db => db.close()).catch(() => { /* ignore */ });
+        _dbPromise = null;
+      },
+      // Fires if the DB connection is force-terminated (browser restart,
+      // tab OOM, etc). Clear the cached promise so the next call reconnects.
+      terminated() {
+        // eslint-disable-next-line no-console
+        console.warn('[marketStore] IDB connection terminated — will reconnect on next call.');
+        _dbPromise = null;
+      },
+    }),
+    8_000,
+    'openDB',
+  ).catch(err => {
+    // Clear the cache so a future call retries instead of latching into
+    // the rejected promise forever.
+    _dbPromise = null;
+    throw err;
   });
   return _dbPromise;
 }
@@ -332,23 +370,70 @@ export async function getCandles(opts: {
     return out;
   }
 
-  // Bounded path: cursor iteration lets us stop after `limit` rows.
-  const out: RawCandle[] = [];
-  let cursor = await idx.openCursor(range, direction === 'desc' ? 'prev' : 'next');
-  let count = 0;
-  while (cursor) {
-    const v = cursor.value;
-    out.push({
+  // Bounded path. Two scenarios, both avoid the row-by-row cursor loop
+  // (microtask storm) and the "slice tail of full getAll" (OOM for big series).
+  //
+  // direction='asc'  → IDB's native `getAll(range, count)` limits natively.
+  // direction='desc' → read how many rows are in the range, then open a
+  //                    cursor and `advance` the surplus in ONE call, then
+  //                    `getAll` from that anchor forward. 3 round-trips
+  //                    total, independent of how big the series is.
+  if (direction === 'asc') {
+    const rows = await idx.getAll(range, limit);
+    const out: RawCandle[] = new Array(rows.length);
+    for (let i = 0; i < rows.length; i++) {
+      const v = rows[i];
+      out[i] = {
+        timestamp: v.timestamp,
+        open: v.open, high: v.high, low: v.low, close: v.close,
+        volume: v.volume,
+        symbol: v.symbol,
+      };
+    }
+    return out;
+  }
+
+  // direction='desc'
+  const total = await idx.count(range);
+  if (total <= limit) {
+    const rows = await idx.getAll(range);
+    const out: RawCandle[] = new Array(rows.length);
+    for (let i = 0; i < rows.length; i++) {
+      const v = rows[i];
+      out[i] = {
+        timestamp: v.timestamp,
+        open: v.open, high: v.high, low: v.low, close: v.close,
+        volume: v.volume,
+        symbol: v.symbol,
+      };
+    }
+    return out;
+  }
+  // Skip (total - limit) rows via a single `advance` call, then bulk-read
+  // the rest. Avoids both the OOM full-range read AND the cursor loop.
+  const skip = total - limit;
+  const startCursor = await idx.openCursor(range, 'next');
+  if (!startCursor) return [];
+  const anchor = skip > 0 ? await startCursor.advance(skip) : startCursor;
+  if (!anchor) return [];
+  const anchorTs = anchor.value.timestamp;
+  const upperTs = toMs ?? Infinity;
+  const anchoredRange = IDBKeyRange.bound(
+    [market, symbol, timeframe, anchorTs],
+    [market, symbol, timeframe, upperTs],
+  );
+  const rows = await idx.getAll(anchoredRange);
+  const out: RawCandle[] = new Array(rows.length);
+  for (let i = 0; i < rows.length; i++) {
+    const v = rows[i];
+    out[i] = {
       timestamp: v.timestamp,
       open: v.open, high: v.high, low: v.low, close: v.close,
       volume: v.volume,
       symbol: v.symbol,
-    });
-    count++;
-    if (count >= limit) break;
-    cursor = await cursor.continue();
+    };
   }
-  return direction === 'desc' ? out.reverse() : out;
+  return out;
 }
 
 /**
@@ -391,6 +476,22 @@ export async function deleteSeries(
     await cursor.delete();
     cursor = await cursor.continue();
   }
+  await tx.done;
+}
+
+/**
+ * Wipe every cached candle + symbol-range metadata.
+ *
+ * Used by the picker's "↻ Rescan disk" action so the next series open
+ * re-reads from CSV (useful after `scripts/mt5_sync.py` writes fresher
+ * bars than what's sitting in IDB). Layouts, markets, and settings are
+ * preserved — only the OHLCV cache + symbol stats are cleared.
+ */
+export async function clearCandleCache(): Promise<void> {
+  const db = await getDB();
+  const tx = db.transaction(['ohlcv', 'symbols'], 'readwrite');
+  await tx.objectStore('ohlcv').clear();
+  await tx.objectStore('symbols').clear();
   await tx.done;
 }
 
