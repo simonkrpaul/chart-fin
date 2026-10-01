@@ -458,12 +458,13 @@ export function renderCycleCombiner(
   ctx.stroke();
   ctx.setLineDash([]);
 
-  // Collect points
+  // Collect points. Replay deliberately does NOT clip here — the combiner is
+  // a forward prediction, so during replay we want to see its curve
+  // *ahead* of the "now" cursor (same contract as offset overlays).
   const points: { x: number; y: number; val: number }[] = [];
   for (let i = 0; i < vp.visibleSlotCount; i++) {
     const si = vp.firstSlotIndex + i;
     if (si < 0 || si >= values.length) continue;
-    if (rc.replayIndex !== undefined && si > rc.replayIndex) break;
     const v = values[si];
     if (v === null) continue;
     const x = i * sw + sw / 2;
