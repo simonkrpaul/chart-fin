@@ -1442,6 +1442,61 @@ function _drawSwingPctPills(
   }
 }
 
+/**
+ * Paint a subtle vertical band at every slot where ALL visible offset overlays
+ * agree on candle direction. Needs ≥ 2 overlays with a projected candle at
+ * that slot; any missing or disagreeing direction → no band at that slot.
+ *
+ * Drawn before main candles so the band sits as a backdrop, letting price
+ * action remain the visually dominant layer.
+ */
+export function renderOffsetConfluenceHighlight(
+  rc: RenderContext,
+  overlays: OffsetOverlay[],
+): void {
+  const visible = overlays.filter(o => o.config.visible);
+  if (visible.length < 2) return;
+
+  const { ctx, viewport: vp } = rc;
+  const sw = slotWidth(vp);
+  const ph = vp.mainPaneHeight;
+  const firstSi = vp.firstSlotIndex;
+  const lastSi = firstSi + vp.visibleSlotCount;
+
+  // Per visible slot, collect each overlay's direction (+1 up, -1 down).
+  // Doji bars (open === close) are skipped so they don't blur consensus.
+  const signsBySlot = new Map<number, number[]>();
+  for (const ov of visible) {
+    for (const pc of ov.projectedCandles) {
+      const si = Math.round(pc.projectedSlotIndex);
+      if (si < firstSi || si >= lastSi) continue;
+      const d = pc.candle.close > pc.candle.open ? 1
+              : pc.candle.close < pc.candle.open ? -1 : 0;
+      if (d === 0) continue;
+      let arr = signsBySlot.get(si);
+      if (!arr) { arr = []; signsBySlot.set(si, arr); }
+      arr.push(d);
+    }
+  }
+
+  ctx.save();
+  const upFill = 'rgba(38, 166, 154, 0.10)';
+  const downFill = 'rgba(239, 83, 80, 0.10)';
+  for (const [si, signs] of signsBySlot) {
+    if (signs.length < visible.length) continue; // every overlay must have voted
+    const first = signs[0];
+    let allEqual = true;
+    for (let i = 1; i < signs.length; i++) {
+      if (signs[i] !== first) { allEqual = false; break; }
+    }
+    if (!allEqual) continue;
+    const screenI = si - firstSi;
+    ctx.fillStyle = first > 0 ? upFill : downFill;
+    ctx.fillRect(screenI * sw, 0, sw, ph);
+  }
+  ctx.restore();
+}
+
 export function renderOverlays(
   rc: RenderContext,
   overlays: OffsetOverlay[],

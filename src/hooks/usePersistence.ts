@@ -44,6 +44,7 @@ function scheduleSave(): void {
       indicatorConfigs: s.indicatorConfigs,
       drawings:         s.drawings,
       overlayConfigs:   s.overlayConfigs,
+      offsetConfluenceHighlight: s.offsetConfluenceHighlight,
     });
   }, 500);
 }
@@ -72,6 +73,11 @@ export function usePersistence(): void {
 
       // 1. Theme – apply immediately so no dark→light flash
       if (prefs?.theme) store.setTheme(prefs.theme);
+
+      // 2. Confluence-highlight toggle — persisted independently of overlays.
+      if (prefs?.offsetConfluenceHighlight && !store.offsetConfluenceHighlight) {
+        store.toggleOffsetConfluenceHighlight();
+      }
 
       // If the new session-restore path (chartSession.restoreLastSession)
       // has already loaded a real series into the store, DO NOT touch

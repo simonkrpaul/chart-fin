@@ -19,6 +19,7 @@ import {
   renderCycleCombiner,
   renderIndicators,
   renderOverlays,
+  renderOffsetConfluenceHighlight,
   renderDrawings,
   renderCrosshair,
   renderReplayCursor,
@@ -55,6 +56,7 @@ export const ChartCanvas: React.FC<Props> = ({ width, height }) => {
     overlayConfigs,
     overlays,
     showOverlays,
+    offsetConfluenceHighlight,
     drawings,
     drawingInProgress,
     activeDrawingTool,
@@ -173,6 +175,9 @@ export const ChartCanvas: React.FC<Props> = ({ width, height }) => {
 
     renderBackground(rc, primarySlots);
     renderHourLabels(rc, primarySlots);
+    if (offsetConfluenceHighlight && visibleOverlays.length >= 2) {
+      renderOffsetConfluenceHighlight(rc, visibleOverlays as any);
+    }
     renderCandles(rc, primarySlots);
     renderVolume(rc, primarySlots);
     if (cycleCombinerConfig.visible && cycleCombinerOutput) {
@@ -248,6 +253,7 @@ export const ChartCanvas: React.FC<Props> = ({ width, height }) => {
     showIndicatorsAndDrawings,
     showEmptyGapSlots,
     showOverlays,
+    offsetConfluenceHighlight,
     hoveredId,
     backtestSignals,
     showBacktestSignals,
