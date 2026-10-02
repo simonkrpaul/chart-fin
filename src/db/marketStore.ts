@@ -20,11 +20,11 @@
  * app performs when the user selects a chart.
  */
 import { openDB, type IDBPDatabase, type DBSchema } from 'idb';
-import type { ChartLayout, RawCandle, Timeframe } from '../types';
+import type { ChartLayout, ChartTemplate, RawCandle, Timeframe } from '../types';
 import type { MarketKind } from '../engine/marketPresets';
 
 const DB_NAME = 'chart-fin-db';
-const DB_VERSION = 1;
+const DB_VERSION = 2;
 
 const TIMEFRAME_MINUTES_LOCAL: Record<Timeframe, number> = {
   '1m': 1, '5m': 5, '10m': 10, '15m': 15, '1h': 60, '4h': 240,
@@ -115,6 +115,11 @@ interface ChartFinDB extends DBSchema {
     value: ChartLayout;
     indexes: { 'by-name': string; 'by-updated': number };
   };
+  templates: {
+    key: string;
+    value: ChartTemplate;
+    indexes: { 'by-name': string; 'by-updated': number };
+  };
   settings: {
     key: string;
     value: { key: string; value: unknown; updatedAt: number };
@@ -161,6 +166,11 @@ export function getDB(): Promise<IDBPDatabase<ChartFinDB>> {
           const l = db.createObjectStore('layouts', { keyPath: 'id' });
           l.createIndex('by-name', 'name', { unique: true });
           l.createIndex('by-updated', 'updatedAt');
+        }
+        if (!db.objectStoreNames.contains('templates')) {
+          const t = db.createObjectStore('templates', { keyPath: 'id' });
+          t.createIndex('by-name', 'name', { unique: true });
+          t.createIndex('by-updated', 'updatedAt');
         }
         if (!db.objectStoreNames.contains('settings')) {
           db.createObjectStore('settings', { keyPath: 'key' });
@@ -523,6 +533,36 @@ export async function listLayoutsDb(): Promise<ChartLayout[]> {
 export async function deleteLayoutDb(id: string): Promise<void> {
   const db = await getDB();
   await db.delete('layouts', id);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Templates (series-agnostic analysis presets — see ChartTemplate type)
+// ─────────────────────────────────────────────────────────────────────────────
+
+export async function saveTemplateDb(tpl: ChartTemplate): Promise<void> {
+  const db = await getDB();
+  await db.put('templates', { ...tpl, updatedAt: Date.now() });
+}
+
+export async function getTemplateDb(id: string): Promise<ChartTemplate | undefined> {
+  const db = await getDB();
+  return db.get('templates', id);
+}
+
+export async function getTemplateByNameDb(name: string): Promise<ChartTemplate | undefined> {
+  const db = await getDB();
+  return db.getFromIndex('templates', 'by-name', name);
+}
+
+export async function listTemplatesDb(): Promise<ChartTemplate[]> {
+  const db = await getDB();
+  const all = await db.getAll('templates');
+  return all.sort((a, b) => b.updatedAt - a.updatedAt);
+}
+
+export async function deleteTemplateDb(id: string): Promise<void> {
+  const db = await getDB();
+  await db.delete('templates', id);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

@@ -27,6 +27,7 @@ import { useLazyBackfill } from './hooks/useLazyBackfill';
 import { requestPersistentStorage } from './db/marketStore';
 import { restoreLastSession, markBootReady } from './store/chartSession';
 import { ensureMarkets } from './db/marketDb';
+import { seedTemplatesFromManifest } from './db/templateManager';
 
 // Guards against React 19 StrictMode double-invocation of the boot effect.
 let _bootRan = false;
@@ -59,6 +60,9 @@ function AppInner() {
       } catch (err) {
         console.error('[boot] ensureMarkets failed — continuing without preset markets', err);
       }
+      // Pull any committed-in-repo templates into IDB (idempotent).
+      // Non-blocking — fire-and-forget so restoreLastSession can run in parallel.
+      void seedTemplatesFromManifest();
       try {
         await restoreLastSession();
       } catch (err) {

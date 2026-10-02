@@ -24,7 +24,11 @@ dist-ssr
 *.sw?
 
 # Large data files (load via RemoteLoader or local file upload)
-public/data/
+# NOTE: ignore the *contents* of public/data/ (not the dir itself) so we can
+# selectively re-include folders like templates/ below. Negating a path inside
+# a fully-excluded directory does not work in git.
+public/data/*
+!public/data/templates/
 *.parquet
 *.csv
 out/

@@ -157,11 +157,12 @@ def rebuild_manifest(
         "version": 1,
         "generatedAt": datetime.now(tz=timezone.utc).isoformat(),
         "sources": sources,
+        "templates": _scan_templates(markets_dir.parent / "templates", repo_root),
     }
     markets_dir.mkdir(parents=True, exist_ok=True)
     manifest_path.write_text(json.dumps(manifest, indent=2))
     if not quiet:
-        print(f"[manifest] rebuilt · {len(sources)} series · {manifest_path.relative_to(repo_root)}")
+        print(f"[manifest] rebuilt · {len(sources)} series · {len(manifest['templates'])} templates · {manifest_path.relative_to(repo_root)}")
         if legacy_1M_files:
             print(
                 f"[manifest] warning: {len(legacy_1M_files)} legacy '_1M.csv' file(s) "
@@ -173,3 +174,36 @@ def rebuild_manifest(
             if len(legacy_1M_files) > 5:
                 print(f"           …and {len(legacy_1M_files) - 5} more.")
     return manifest_path
+
+
+def _scan_templates(
+    templates_dir: pathlib.Path,
+    repo_root: pathlib.Path,
+) -> list[dict]:
+    """List every `.json` under `public/data/templates/` for the frontend to
+    seed into IndexedDB on first boot. Each entry is `{id, name, url,
+    description?}` — the full payload is fetched on demand.
+    """
+    if not templates_dir.exists():
+        return []
+    out: list[dict] = []
+    for p in sorted(templates_dir.glob("*.json")):
+        try:
+            tpl = json.loads(p.read_text())
+        except json.JSONDecodeError:
+            print(f"[manifest] warning: skipping unparseable template {p.name}")
+            continue
+        name = tpl.get("name")
+        if not isinstance(name, str) or not name.strip():
+            print(f"[manifest] warning: skipping template {p.name} — missing 'name'")
+            continue
+        entry: dict = {
+            "id": tpl.get("id") or p.stem,
+            "name": name.strip(),
+            "url": "/" + p.relative_to(repo_root / "public").as_posix(),
+        }
+        desc = tpl.get("description")
+        if isinstance(desc, str) and desc.strip():
+            entry["description"] = desc.strip()
+        out.append(entry)
+    return out
