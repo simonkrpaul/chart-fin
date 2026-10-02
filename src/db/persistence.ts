@@ -25,6 +25,7 @@ export interface StoredPrefs {
   indicatorConfigs: IndicatorConfig[];
   drawings: Drawing[];
   overlayConfigs: OffsetOverlayConfig[];
+  offsetConfluenceHighlight?: boolean;
 }
 
 export interface StoredDataset {

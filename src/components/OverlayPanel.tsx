@@ -38,6 +38,8 @@ export const OverlayPanel: React.FC = () => {
     toggleOverlay,
     showOverlays,
     toggleShowOverlays,
+    offsetConfluenceHighlight,
+    toggleOffsetConfluenceHighlight,
     updateOverlayConfig,
     theme,
   } = useChartStore();
@@ -178,6 +180,25 @@ export const OverlayPanel: React.FC = () => {
           {showOverlays ? '👁 Hide all' : '👁 Show all'}
         </button>
       </div>
+
+      {/* Confluence highlight — subtle background band when all visible
+          overlays agree on direction at the same slot. Active only when 2+
+          overlays are showing. */}
+      <label
+        title="When 2 or more offset overlays are visible, paint a subtle green/red band on slots where ALL overlays' projected candles agree in direction."
+        style={{
+          display: 'flex', alignItems: 'center', gap: 6,
+          marginBottom: 10, fontSize: 11, opacity: 0.85, cursor: 'pointer',
+        }}
+      >
+        <input
+          type="checkbox"
+          checked={offsetConfluenceHighlight}
+          onChange={toggleOffsetConfluenceHighlight}
+          style={{ cursor: 'pointer' }}
+        />
+        Highlight confluence (all overlays agree)
+      </label>
 
       {/* Anchor date */}
       <div style={{ marginBottom: 6 }}>

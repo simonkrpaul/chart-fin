@@ -217,6 +217,10 @@ export interface ChartState {
    *  config's own `visible` flag — flip off for a one-click clean chart, flip
    *  back on to restore whatever the user had toggled per-overlay. */
   showOverlays: boolean;
+  /** When true AND ≥ 2 visible overlays agree on candle direction at a slot,
+   *  paint a subtle vertical band behind the main candles (green = all up,
+   *  red = all down). Any disagreement or missing overlay candle → no band. */
+  offsetConfluenceHighlight: boolean;
 
   // Drawings
   drawings: Drawing[];
@@ -364,6 +368,7 @@ export interface ChartActions {
   removeOverlay: (id: string) => void;
   toggleOverlay: (id: string) => void;
   toggleShowOverlays: () => void;
+  toggleOffsetConfluenceHighlight: () => void;
   updateOverlayConfig: (id: string, patch: Partial<OffsetOverlayConfig>) => void;
 
   // Drawings
@@ -479,6 +484,7 @@ export function createChartStore(panelId: string = 'p1'): StoreApi<ChartState & 
     overlays: {},
     historicalCandlesByOverlay: {},
     showOverlays: true,
+    offsetConfluenceHighlight: false,
 
     // ── drawings ────────────────────────────────────────────────────────────
     drawings: [],
@@ -1186,6 +1192,10 @@ export function createChartStore(panelId: string = 'p1'): StoreApi<ChartState & 
 
     toggleShowOverlays: () => {
       set(state => { state.showOverlays = !state.showOverlays; });
+    },
+
+    toggleOffsetConfluenceHighlight: () => {
+      set(state => { state.offsetConfluenceHighlight = !state.offsetConfluenceHighlight; });
     },
 
     updateOverlayConfig: (id, patch) => {
