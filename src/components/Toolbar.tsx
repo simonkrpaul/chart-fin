@@ -5,6 +5,7 @@ import React, { useCallback, useRef, useState } from 'react';
 import { useChartStore } from '../store/chartStore';
 import { ChartPicker } from './ChartPicker';
 import { LayoutManager } from './LayoutManager';
+import { TemplateManager } from './TemplateManager';
 import { LayoutSelector } from './LayoutSelector';
 import { TimezoneSelector } from './TimezoneSelector';
 import { SessionHoursPopover } from './SessionHoursPopover';
@@ -182,6 +183,9 @@ export const Toolbar: React.FC = () => {
 
       {/* Named layout save / load */}
       <LayoutManager />
+
+      {/* Series-agnostic templates (indicators + overlays + cycle combiner + transits) */}
+      <TemplateManager />
 
       <div style={{ width: 1, height: 20, background: border, margin: '0 6px' }} />
 

@@ -536,6 +536,38 @@ export interface ChartLayout {
   updatedAt: number;
 }
 
+/**
+ * ChartTemplate — a series-agnostic analysis preset.
+ *
+ * Unlike `ChartLayout`, a template does NOT bind to a specific symbol or
+ * viewport. It carries only the "how to look at a chart" bits (indicators,
+ * overlays, cycle combiner, transits, display toggles) so it can be applied
+ * on top of whatever series is currently loaded.
+ *
+ * Templates are stored in IndexedDB and can be exported to JSON for check-in
+ * under `public/data/templates/` (see scripts/_manifest.py).
+ */
+export interface ChartTemplate {
+  schemaVersion: 1;
+  id: string;
+  name: string;
+  description?: string;
+  createdAt: number;
+  updatedAt: number;
+  payload: ChartTemplatePayload;
+}
+
+export interface ChartTemplatePayload {
+  timeframe?: Timeframe;
+  showOverlays?: boolean;
+  offsetConfluenceHighlight?: boolean;
+  gapVisibility?: 'session_trading_days' | 'session_calendar_days';
+  indicatorConfigs?: IndicatorConfig[];
+  overlayConfigs?: OffsetOverlayConfig[];
+  cycleCombinerConfig?: CycleCombinerConfig;
+  transitZoneGroups?: TransitZoneGroup[];
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Theme tokens (used by renderer directly – no CSS variables in canvas)
 // ─────────────────────────────────────────────────────────────────────────────
