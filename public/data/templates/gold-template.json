@@ -1,0 +1,1605 @@
+{
+  "schemaVersion": 1,
+  "id": "tmpl-1790903230867-zfxclb",
+  "name": "gold-template",
+  "description": "gold-analog",
+  "createdAt": 1790903230867,
+  "updatedAt": 1790903230867,
+  "payload": {
+    "timeframe": "1h",
+    "showOverlays": true,
+    "offsetConfluenceHighlight": true,
+    "gapVisibility": "session_calendar_days",
+    "indicatorConfigs": [
+      {
+        "id": "moon_signals-1790863415128",
+        "type": "MOON_SIGNALS",
+        "params": {},
+        "color": "#2196f3",
+        "lineWidth": 1.5,
+        "visible": true,
+        "pane": "main"
+      },
+      {
+        "id": "high_low_levels-1790896790107",
+        "type": "HIGH_LOW_LEVELS",
+        "params": {
+          "showDaily": true,
+          "showWeekly": false,
+          "showMonthly": false,
+          "showSession": false,
+          "dailyColor": "#2196f3",
+          "weeklyColor": "#ff9800",
+          "monthlyColor": "#9c27b0",
+          "sessionColor": "#e91e63"
+        },
+        "color": "#2196f3",
+        "lineWidth": 1.5,
+        "visible": true,
+        "pane": "main"
+      }
+    ],
+    "overlayConfigs": [
+      {
+        "id": "58ef276f-baa5-4742-b1a7-8170cb3c5bb7",
+        "label": "87d from 2020-01-01",
+        "sourceStartTimestamp": 1570320000000,
+        "sourceEndTimestamp": 1790672400000,
+        "calendarDayOffset": 87,
+        "mode": "overlay",
+        "anchorType": "date",
+        "color": "#ffffff",
+        "opacity": 0.75,
+        "lineOnly": false,
+        "dashed": false,
+        "visible": true,
+        "zIndex": 0,
+        "showSwingHL": false,
+        "swingHLLeftRight": 5,
+        "showSwingPct": false
+      },
+      {
+        "id": "fc0fce4c-509b-4527-bdc2-4f3312601931",
+        "label": "336d from 2020-01-01",
+        "sourceStartTimestamp": 1548806400000,
+        "sourceEndTimestamp": 1790861700000,
+        "calendarDayOffset": 336,
+        "mode": "overlay",
+        "anchorType": "date",
+        "color": "#4fc3f7",
+        "opacity": 0.75,
+        "lineOnly": false,
+        "dashed": false,
+        "visible": true,
+        "zIndex": 1,
+        "showSwingHL": false,
+        "swingHLLeftRight": 5,
+        "showSwingPct": false
+      },
+      {
+        "id": "f0ab35b6-db10-44d5-a061-27807a2deb11",
+        "label": "273d from 2020-01-01",
+        "sourceStartTimestamp": 1554249600000,
+        "sourceEndTimestamp": 1790861700000,
+        "calendarDayOffset": 273,
+        "mode": "overlay",
+        "anchorType": "date",
+        "color": "#f5c518",
+        "opacity": 0.75,
+        "lineOnly": false,
+        "dashed": false,
+        "visible": true,
+        "zIndex": 2,
+        "showSwingHL": false,
+        "swingHLLeftRight": 5,
+        "showSwingPct": false
+      },
+      {
+        "id": "98cefd90-e784-4688-8f6e-2dedc3a49ddf",
+        "label": "41d from 2020-01-01",
+        "sourceStartTimestamp": 1574294400000,
+        "sourceEndTimestamp": 1790859600000,
+        "calendarDayOffset": 41,
+        "mode": "overlay",
+        "anchorType": "date",
+        "color": "#ec407a",
+        "opacity": 0.75,
+        "lineOnly": false,
+        "dashed": false,
+        "visible": true,
+        "zIndex": 5,
+        "showSwingHL": false,
+        "swingHLLeftRight": 5,
+        "showSwingPct": false
+      },
+      {
+        "id": "5a940a5e-2ddc-4d49-8aac-60e4839dc751",
+        "label": "54d from 2020-01-01",
+        "sourceStartTimestamp": 1573171200000,
+        "sourceEndTimestamp": 1790859600000,
+        "calendarDayOffset": 54,
+        "mode": "overlay",
+        "anchorType": "date",
+        "color": "#ff7043",
+        "opacity": 0.75,
+        "lineOnly": false,
+        "dashed": false,
+        "visible": true,
+        "zIndex": 5,
+        "showSwingHL": false,
+        "swingHLLeftRight": 5,
+        "showSwingPct": false
+      }
+    ],
+    "cycleCombinerConfig": {
+      "cycles": [],
+      "smoothing": 5,
+      "visible": true,
+      "color": "#00e5ff"
+    },
+    "transitZoneGroups": [
+      {
+        "label": "Moon-Rahu (True Node) Sid 280° → 300°",
+        "direction": "UP",
+        "probability": "?%",
+        "color": "#e040fb",
+        "visible": true,
+        "zones": [
+          {
+            "entryTimestamp": 1578074400000,
+            "exitTimestamp": 1578214800000,
+            "entrySlotIndex": 5429,
+            "exitSlotIndex": 5461
+          },
+          {
+            "entryTimestamp": 1580428800000,
+            "exitTimestamp": 1580576400000,
+            "entrySlotIndex": 6035,
+            "exitSlotIndex": 6069
+          },
+          {
+            "entryTimestamp": 1582776000000,
+            "exitTimestamp": 1582920000000,
+            "entrySlotIndex": 6640,
+            "exitSlotIndex": 6679
+          },
+          {
+            "entryTimestamp": 1585112400000,
+            "exitTimestamp": 1585252800000,
+            "entrySlotIndex": 7246,
+            "exitSlotIndex": 7284
+          },
+          {
+            "entryTimestamp": 1587448800000,
+            "exitTimestamp": 1587589200000,
+            "entrySlotIndex": 7829,
+            "exitSlotIndex": 7866
+          },
+          {
+            "entryTimestamp": 1589792400000,
+            "exitTimestamp": 1589936400000,
+            "entrySlotIndex": 8437,
+            "exitSlotIndex": 8475
+          },
+          {
+            "entryTimestamp": 1592150400000,
+            "exitTimestamp": 1592294400000,
+            "entrySlotIndex": 9044,
+            "exitSlotIndex": 9083
+          },
+          {
+            "entryTimestamp": 1594508400000,
+            "exitTimestamp": 1594656000000,
+            "entrySlotIndex": 9651,
+            "exitSlotIndex": 9692
+          },
+          {
+            "entryTimestamp": 1596862800000,
+            "exitTimestamp": 1597006800000,
+            "entrySlotIndex": 10261,
+            "exitSlotIndex": 10301
+          },
+          {
+            "entryTimestamp": 1599206400000,
+            "exitTimestamp": 1599350400000,
+            "entrySlotIndex": 10874,
+            "exitSlotIndex": 10907
+          },
+          {
+            "entryTimestamp": 1601542800000,
+            "exitTimestamp": 1601686800000,
+            "entrySlotIndex": 11476,
+            "exitSlotIndex": 11511
+          },
+          {
+            "entryTimestamp": 1603882800000,
+            "exitTimestamp": 1604026800000,
+            "entrySlotIndex": 12083,
+            "exitSlotIndex": 12121
+          },
+          {
+            "entryTimestamp": 1606233600000,
+            "exitTimestamp": 1606377600000,
+            "entrySlotIndex": 12692,
+            "exitSlotIndex": 12730
+          },
+          {
+            "entryTimestamp": 1608591600000,
+            "exitTimestamp": 1608735600000,
+            "entrySlotIndex": 13296,
+            "exitSlotIndex": 13335
+          },
+          {
+            "entryTimestamp": 1610949600000,
+            "exitTimestamp": 1611090000000,
+            "entrySlotIndex": 13859,
+            "exitSlotIndex": 13893
+          },
+          {
+            "entryTimestamp": 1613300400000,
+            "exitTimestamp": 1613440800000,
+            "entrySlotIndex": 14464,
+            "exitSlotIndex": 14498
+          },
+          {
+            "entryTimestamp": 1615640400000,
+            "exitTimestamp": 1615780800000,
+            "entrySlotIndex": 15066,
+            "exitSlotIndex": 15105
+          },
+          {
+            "entryTimestamp": 1617980400000,
+            "exitTimestamp": 1618120800000,
+            "entrySlotIndex": 15656,
+            "exitSlotIndex": 15688
+          },
+          {
+            "entryTimestamp": 1620327600000,
+            "exitTimestamp": 1620468000000,
+            "entrySlotIndex": 16265,
+            "exitSlotIndex": 16296
+          },
+          {
+            "entryTimestamp": 1622682000000,
+            "exitTimestamp": 1622822400000,
+            "entrySlotIndex": 16871,
+            "exitSlotIndex": 16909
+          },
+          {
+            "entryTimestamp": 1625040000000,
+            "exitTimestamp": 1625176800000,
+            "entrySlotIndex": 17483,
+            "exitSlotIndex": 17519
+          },
+          {
+            "entryTimestamp": 1627394400000,
+            "exitTimestamp": 1627527600000,
+            "entrySlotIndex": 18090,
+            "exitSlotIndex": 18125
+          },
+          {
+            "entryTimestamp": 1629745200000,
+            "exitTimestamp": 1629878400000,
+            "entrySlotIndex": 18700,
+            "exitSlotIndex": 18735
+          },
+          {
+            "entryTimestamp": 1632088800000,
+            "exitTimestamp": 1632222000000,
+            "entrySlotIndex": 19303,
+            "exitSlotIndex": 19339
+          },
+          {
+            "entryTimestamp": 1634436000000,
+            "exitTimestamp": 1634569200000,
+            "entrySlotIndex": 19911,
+            "exitSlotIndex": 19948
+          },
+          {
+            "entryTimestamp": 1636783200000,
+            "exitTimestamp": 1636920000000,
+            "entrySlotIndex": 20518,
+            "exitSlotIndex": 20556
+          },
+          {
+            "entryTimestamp": 1639137600000,
+            "exitTimestamp": 1639270800000,
+            "entrySlotIndex": 21128,
+            "exitSlotIndex": 21158
+          },
+          {
+            "entryTimestamp": 1641495600000,
+            "exitTimestamp": 1641625200000,
+            "entrySlotIndex": 21717,
+            "exitSlotIndex": 21745
+          },
+          {
+            "entryTimestamp": 1643853600000,
+            "exitTimestamp": 1643976000000,
+            "entrySlotIndex": 22324,
+            "exitSlotIndex": 22357
+          },
+          {
+            "entryTimestamp": 1646204400000,
+            "exitTimestamp": 1646326800000,
+            "entrySlotIndex": 22932,
+            "exitSlotIndex": 22965
+          },
+          {
+            "entryTimestamp": 1648551600000,
+            "exitTimestamp": 1648677600000,
+            "entrySlotIndex": 23541,
+            "exitSlotIndex": 23574
+          },
+          {
+            "entryTimestamp": 1650898800000,
+            "exitTimestamp": 1651028400000,
+            "entrySlotIndex": 24127,
+            "exitSlotIndex": 24161
+          },
+          {
+            "entryTimestamp": 1653253200000,
+            "exitTimestamp": 1653379200000,
+            "entrySlotIndex": 24737,
+            "exitSlotIndex": 24771
+          },
+          {
+            "entryTimestamp": 1655607600000,
+            "exitTimestamp": 1655733600000,
+            "entrySlotIndex": 25345,
+            "exitSlotIndex": 25380
+          },
+          {
+            "entryTimestamp": 1657962000000,
+            "exitTimestamp": 1658084400000,
+            "entrySlotIndex": 25951,
+            "exitSlotIndex": 25985
+          },
+          {
+            "entryTimestamp": 1660316400000,
+            "exitTimestamp": 1660435200000,
+            "entrySlotIndex": 26568,
+            "exitSlotIndex": 26594
+          },
+          {
+            "entryTimestamp": 1662670800000,
+            "exitTimestamp": 1662789600000,
+            "entrySlotIndex": 27177,
+            "exitSlotIndex": 27202
+          },
+          {
+            "entryTimestamp": 1665025200000,
+            "exitTimestamp": 1665144000000,
+            "entrySlotIndex": 27787,
+            "exitSlotIndex": 27819
+          },
+          {
+            "entryTimestamp": 1667376000000,
+            "exitTimestamp": 1667498400000,
+            "entrySlotIndex": 28397,
+            "exitSlotIndex": 28430
+          },
+          {
+            "entryTimestamp": 1669726800000,
+            "exitTimestamp": 1669849200000,
+            "entrySlotIndex": 29001,
+            "exitSlotIndex": 29033
+          },
+          {
+            "entryTimestamp": 1672081200000,
+            "exitTimestamp": 1672200000000,
+            "entrySlotIndex": 29598,
+            "exitSlotIndex": 29626
+          },
+          {
+            "entryTimestamp": 1674435600000,
+            "exitTimestamp": 1674550800000,
+            "entrySlotIndex": 30184,
+            "exitSlotIndex": 30215
+          },
+          {
+            "entryTimestamp": 1676793600000,
+            "exitTimestamp": 1676905200000,
+            "entrySlotIndex": 30795,
+            "exitSlotIndex": 30826
+          },
+          {
+            "entryTimestamp": 1679151600000,
+            "exitTimestamp": 1679266800000,
+            "entrySlotIndex": 31404,
+            "exitSlotIndex": 31436
+          },
+          {
+            "entryTimestamp": 1681506000000,
+            "exitTimestamp": 1681624800000,
+            "entrySlotIndex": 31997,
+            "exitSlotIndex": 32024
+          },
+          {
+            "entryTimestamp": 1683856800000,
+            "exitTimestamp": 1683979200000,
+            "entrySlotIndex": 32607,
+            "exitSlotIndex": 32634
+          },
+          {
+            "entryTimestamp": 1686207600000,
+            "exitTimestamp": 1686326400000,
+            "entrySlotIndex": 33215,
+            "exitSlotIndex": 33247
+          },
+          {
+            "entryTimestamp": 1688558400000,
+            "exitTimestamp": 1688673600000,
+            "entrySlotIndex": 33821,
+            "exitSlotIndex": 33852
+          },
+          {
+            "entryTimestamp": 1690912800000,
+            "exitTimestamp": 1691024400000,
+            "entrySlotIndex": 34432,
+            "exitSlotIndex": 34461
+          },
+          {
+            "entryTimestamp": 1693270800000,
+            "exitTimestamp": 1693382400000,
+            "entrySlotIndex": 35043,
+            "exitSlotIndex": 35073
+          },
+          {
+            "entryTimestamp": 1695628800000,
+            "exitTimestamp": 1695747600000,
+            "entrySlotIndex": 35653,
+            "exitSlotIndex": 35685
+          },
+          {
+            "entryTimestamp": 1697986800000,
+            "exitTimestamp": 1698109200000,
+            "entrySlotIndex": 36264,
+            "exitSlotIndex": 36297
+          },
+          {
+            "entryTimestamp": 1700337600000,
+            "exitTimestamp": 1700460000000,
+            "entrySlotIndex": 36872,
+            "exitSlotIndex": 36906
+          },
+          {
+            "entryTimestamp": 1702681200000,
+            "exitTimestamp": 1702800000000,
+            "entrySlotIndex": 37477,
+            "exitSlotIndex": 37505
+          },
+          {
+            "entryTimestamp": 1705032000000,
+            "exitTimestamp": 1705147200000,
+            "entrySlotIndex": 38054,
+            "exitSlotIndex": 38079
+          },
+          {
+            "entryTimestamp": 1707386400000,
+            "exitTimestamp": 1707501600000,
+            "entrySlotIndex": 38663,
+            "exitSlotIndex": 38694
+          },
+          {
+            "entryTimestamp": 1709748000000,
+            "exitTimestamp": 1709866800000,
+            "entrySlotIndex": 39274,
+            "exitSlotIndex": 39305
+          },
+          {
+            "entryTimestamp": 1712109600000,
+            "exitTimestamp": 1712232000000,
+            "entrySlotIndex": 39863,
+            "exitSlotIndex": 39896
+          },
+          {
+            "entryTimestamp": 1714464000000,
+            "exitTimestamp": 1714586400000,
+            "entrySlotIndex": 40474,
+            "exitSlotIndex": 40507
+          },
+          {
+            "entryTimestamp": 1716807600000,
+            "exitTimestamp": 1716933600000,
+            "entrySlotIndex": 41082,
+            "exitSlotIndex": 41113
+          },
+          {
+            "entryTimestamp": 1719151200000,
+            "exitTimestamp": 1719273600000,
+            "entrySlotIndex": 41685,
+            "exitSlotIndex": 41718
+          },
+          {
+            "entryTimestamp": 1721498400000,
+            "exitTimestamp": 1721617200000,
+            "entrySlotIndex": 42291,
+            "exitSlotIndex": 42324
+          },
+          {
+            "entryTimestamp": 1723856400000,
+            "exitTimestamp": 1723975200000,
+            "entrySlotIndex": 42905,
+            "exitSlotIndex": 42935
+          },
+          {
+            "entryTimestamp": 1726218000000,
+            "exitTimestamp": 1726344000000,
+            "entrySlotIndex": 43519,
+            "exitSlotIndex": 43547
+          },
+          {
+            "entryTimestamp": 1728579600000,
+            "exitTimestamp": 1728709200000,
+            "entrySlotIndex": 44132,
+            "exitSlotIndex": 44160
+          },
+          {
+            "entryTimestamp": 1730930400000,
+            "exitTimestamp": 1731060000000,
+            "entrySlotIndex": 44741,
+            "exitSlotIndex": 44775
+          },
+          {
+            "entryTimestamp": 1733266800000,
+            "exitTimestamp": 1733396400000,
+            "entrySlotIndex": 45342,
+            "exitSlotIndex": 45377
+          },
+          {
+            "entryTimestamp": 1735606800000,
+            "exitTimestamp": 1735736400000,
+            "entrySlotIndex": 45923,
+            "exitSlotIndex": 45944
+          },
+          {
+            "entryTimestamp": 1737957600000,
+            "exitTimestamp": 1738083600000,
+            "entrySlotIndex": 46508,
+            "exitSlotIndex": 46542
+          },
+          {
+            "entryTimestamp": 1740319200000,
+            "exitTimestamp": 1740448800000,
+            "entrySlotIndex": 47118,
+            "exitSlotIndex": 47153
+          },
+          {
+            "entryTimestamp": 1742680800000,
+            "exitTimestamp": 1742814000000,
+            "entrySlotIndex": 47730,
+            "exitSlotIndex": 47767
+          },
+          {
+            "entryTimestamp": 1745035200000,
+            "exitTimestamp": 1745172000000,
+            "entrySlotIndex": 48317,
+            "exitSlotIndex": 48355
+          },
+          {
+            "entryTimestamp": 1747378800000,
+            "exitTimestamp": 1747515600000,
+            "entrySlotIndex": 48931,
+            "exitSlotIndex": 48962
+          },
+          {
+            "entryTimestamp": 1749715200000,
+            "exitTimestamp": 1749852000000,
+            "entrySlotIndex": 49535,
+            "exitSlotIndex": 49570
+          },
+          {
+            "entryTimestamp": 1752055200000,
+            "exitTimestamp": 1752192000000,
+            "entrySlotIndex": 50136,
+            "exitSlotIndex": 50172
+          },
+          {
+            "entryTimestamp": 1754406000000,
+            "exitTimestamp": 1754542800000,
+            "entrySlotIndex": 50746,
+            "exitSlotIndex": 50782
+          },
+          {
+            "entryTimestamp": 1756767600000,
+            "exitTimestamp": 1756904400000,
+            "entrySlotIndex": 51356,
+            "exitSlotIndex": 51393
+          },
+          {
+            "entryTimestamp": 1759129200000,
+            "exitTimestamp": 1759269600000,
+            "entrySlotIndex": 51969,
+            "exitSlotIndex": 52006
+          },
+          {
+            "entryTimestamp": 1761480000000,
+            "exitTimestamp": 1761620400000,
+            "entrySlotIndex": 52578,
+            "exitSlotIndex": 52616
+          },
+          {
+            "entryTimestamp": 1763816400000,
+            "exitTimestamp": 1763956800000,
+            "entrySlotIndex": 53182,
+            "exitSlotIndex": 53221
+          },
+          {
+            "entryTimestamp": 1766152800000,
+            "exitTimestamp": 1766293200000,
+            "entrySlotIndex": 53790,
+            "exitSlotIndex": 53822
+          },
+          {
+            "entryTimestamp": 1768492800000,
+            "exitTimestamp": 1768633200000,
+            "entrySlotIndex": 54366,
+            "exitSlotIndex": 54397
+          },
+          {
+            "entryTimestamp": 1770847200000,
+            "exitTimestamp": 1770991200000,
+            "entrySlotIndex": 54975,
+            "exitSlotIndex": 55013
+          },
+          {
+            "entryTimestamp": 1773208800000,
+            "exitTimestamp": 1773352800000,
+            "entrySlotIndex": 55585,
+            "exitSlotIndex": 55623
+          },
+          {
+            "entryTimestamp": 1775566800000,
+            "exitTimestamp": 1775710800000,
+            "entrySlotIndex": 56174,
+            "exitSlotIndex": 56212
+          },
+          {
+            "entryTimestamp": 1777910400000,
+            "exitTimestamp": 1778054400000,
+            "entrySlotIndex": 56782,
+            "exitSlotIndex": 56820
+          },
+          {
+            "entryTimestamp": 1780246800000,
+            "exitTimestamp": 1780390800000,
+            "entrySlotIndex": 57385,
+            "exitSlotIndex": 57424
+          },
+          {
+            "entryTimestamp": 1782583200000,
+            "exitTimestamp": 1782727200000,
+            "entrySlotIndex": 57986,
+            "exitSlotIndex": 58026
+          },
+          {
+            "entryTimestamp": 1784930400000,
+            "exitTimestamp": 1785074400000,
+            "entrySlotIndex": 58595,
+            "exitSlotIndex": 58630
+          },
+          {
+            "entryTimestamp": 1787288400000,
+            "exitTimestamp": 1787432400000,
+            "entrySlotIndex": 59208,
+            "exitSlotIndex": 59241
+          },
+          {
+            "entryTimestamp": 1789646400000,
+            "exitTimestamp": 1789790400000,
+            "entrySlotIndex": 59818,
+            "exitSlotIndex": 59850
+          },
+          {
+            "entryTimestamp": 1792000800000,
+            "exitTimestamp": 1792144800000,
+            "entrySlotIndex": 60426,
+            "exitSlotIndex": 60463
+          },
+          {
+            "entryTimestamp": 1794344400000,
+            "exitTimestamp": 1794484800000,
+            "entrySlotIndex": 61029,
+            "exitSlotIndex": 61065
+          },
+          {
+            "entryTimestamp": 1796680800000,
+            "exitTimestamp": 1796821200000,
+            "entrySlotIndex": 61629,
+            "exitSlotIndex": 61665
+          },
+          {
+            "entryTimestamp": 1799020800000,
+            "exitTimestamp": 1799164800000,
+            "entrySlotIndex": 62231,
+            "exitSlotIndex": 62268
+          },
+          {
+            "entryTimestamp": 1801371600000,
+            "exitTimestamp": 1801515600000,
+            "entrySlotIndex": 62835,
+            "exitSlotIndex": 62872
+          },
+          {
+            "entryTimestamp": 1803729600000,
+            "exitTimestamp": 1803873600000,
+            "entrySlotIndex": 63441,
+            "exitSlotIndex": 63478
+          },
+          {
+            "entryTimestamp": 1806087600000,
+            "exitTimestamp": 1806228000000,
+            "entrySlotIndex": 64047,
+            "exitSlotIndex": 64083
+          },
+          {
+            "entryTimestamp": 1808438400000,
+            "exitTimestamp": 1808575200000,
+            "entrySlotIndex": 64651,
+            "exitSlotIndex": 64686
+          },
+          {
+            "entryTimestamp": 1810782000000,
+            "exitTimestamp": 1810915200000,
+            "entrySlotIndex": 65253,
+            "exitSlotIndex": 65288
+          },
+          {
+            "entryTimestamp": 1813122000000,
+            "exitTimestamp": 1813258800000,
+            "entrySlotIndex": 65855,
+            "exitSlotIndex": 65890
+          },
+          {
+            "entryTimestamp": 1815469200000,
+            "exitTimestamp": 1815609600000,
+            "entrySlotIndex": 66458,
+            "exitSlotIndex": 66494
+          },
+          {
+            "entryTimestamp": 1817823600000,
+            "exitTimestamp": 1817960400000,
+            "entrySlotIndex": 67063,
+            "exitSlotIndex": 67098
+          },
+          {
+            "entryTimestamp": 1820181600000,
+            "exitTimestamp": 1820314800000,
+            "entrySlotIndex": 67669,
+            "exitSlotIndex": 67704
+          },
+          {
+            "entryTimestamp": 1822536000000,
+            "exitTimestamp": 1822669200000,
+            "entrySlotIndex": 68274,
+            "exitSlotIndex": 68309
+          },
+          {
+            "entryTimestamp": 1824886800000,
+            "exitTimestamp": 1825016400000,
+            "entrySlotIndex": 68879,
+            "exitSlotIndex": 68912
+          },
+          {
+            "entryTimestamp": 1827234000000,
+            "exitTimestamp": 1827363600000,
+            "entrySlotIndex": 69482,
+            "exitSlotIndex": 69515
+          },
+          {
+            "entryTimestamp": 1829581200000,
+            "exitTimestamp": 1829710800000,
+            "entrySlotIndex": 70085,
+            "exitSlotIndex": 70118
+          }
+        ],
+        "id": "transit-1790903131151-cf9dlq"
+      },
+      {
+        "label": "Moon-Ketu Sid 280° → 300°",
+        "direction": "DOWN",
+        "probability": "?%",
+        "color": "#e040fb",
+        "visible": true,
+        "zones": [
+          {
+            "entryTimestamp": 1579208400000,
+            "exitTimestamp": 1579330800000,
+            "entrySlotIndex": 5723,
+            "exitSlotIndex": 5749
+          },
+          {
+            "entryTimestamp": 1581559200000,
+            "exitTimestamp": 1581678000000,
+            "entrySlotIndex": 6328,
+            "exitSlotIndex": 6360
+          },
+          {
+            "entryTimestamp": 1583917200000,
+            "exitTimestamp": 1584032400000,
+            "entrySlotIndex": 6936,
+            "exitSlotIndex": 6967
+          },
+          {
+            "entryTimestamp": 1586282400000,
+            "exitTimestamp": 1586397600000,
+            "entrySlotIndex": 7550,
+            "exitSlotIndex": 7580
+          },
+          {
+            "entryTimestamp": 1588644000000,
+            "exitTimestamp": 1588759200000,
+            "entrySlotIndex": 8139,
+            "exitSlotIndex": 8170
+          },
+          {
+            "entryTimestamp": 1590998400000,
+            "exitTimestamp": 1591117200000,
+            "entrySlotIndex": 8746,
+            "exitSlotIndex": 8778
+          },
+          {
+            "entryTimestamp": 1593345600000,
+            "exitTimestamp": 1593464400000,
+            "entrySlotIndex": 9354,
+            "exitSlotIndex": 9386
+          },
+          {
+            "entryTimestamp": 1595689200000,
+            "exitTimestamp": 1595808000000,
+            "entrySlotIndex": 9957,
+            "exitSlotIndex": 9990
+          },
+          {
+            "entryTimestamp": 1598036400000,
+            "exitTimestamp": 1598155200000,
+            "entrySlotIndex": 10571,
+            "exitSlotIndex": 10597
+          },
+          {
+            "entryTimestamp": 1600394400000,
+            "exitTimestamp": 1600509600000,
+            "entrySlotIndex": 11178,
+            "exitSlotIndex": 11203
+          },
+          {
+            "entryTimestamp": 1602759600000,
+            "exitTimestamp": 1602871200000,
+            "entrySlotIndex": 11792,
+            "exitSlotIndex": 11822
+          },
+          {
+            "entryTimestamp": 1605121200000,
+            "exitTimestamp": 1605236400000,
+            "entrySlotIndex": 12404,
+            "exitSlotIndex": 12434
+          },
+          {
+            "entryTimestamp": 1607475600000,
+            "exitTimestamp": 1607594400000,
+            "entrySlotIndex": 13007,
+            "exitSlotIndex": 13039
+          },
+          {
+            "entryTimestamp": 1609819200000,
+            "exitTimestamp": 1609941600000,
+            "entrySlotIndex": 13566,
+            "exitSlotIndex": 13599
+          },
+          {
+            "entryTimestamp": 1612162800000,
+            "exitTimestamp": 1612285200000,
+            "entrySlotIndex": 14170,
+            "exitSlotIndex": 14203
+          },
+          {
+            "entryTimestamp": 1614517200000,
+            "exitTimestamp": 1614636000000,
+            "entrySlotIndex": 14776,
+            "exitSlotIndex": 14809
+          },
+          {
+            "entryTimestamp": 1616878800000,
+            "exitTimestamp": 1616994000000,
+            "entrySlotIndex": 15388,
+            "exitSlotIndex": 15420
+          },
+          {
+            "entryTimestamp": 1619240400000,
+            "exitTimestamp": 1619355600000,
+            "entrySlotIndex": 15977,
+            "exitSlotIndex": 16009
+          },
+          {
+            "entryTimestamp": 1621594800000,
+            "exitTimestamp": 1621717200000,
+            "entrySlotIndex": 16594,
+            "exitSlotIndex": 16621
+          },
+          {
+            "entryTimestamp": 1623945600000,
+            "exitTimestamp": 1624071600000,
+            "entrySlotIndex": 17200,
+            "exitSlotIndex": 17228
+          },
+          {
+            "entryTimestamp": 1626289200000,
+            "exitTimestamp": 1626415200000,
+            "entrySlotIndex": 17804,
+            "exitSlotIndex": 17837
+          },
+          {
+            "entryTimestamp": 1628632800000,
+            "exitTimestamp": 1628758800000,
+            "entrySlotIndex": 18411,
+            "exitSlotIndex": 18445
+          },
+          {
+            "entryTimestamp": 1630983600000,
+            "exitTimestamp": 1631106000000,
+            "entrySlotIndex": 19017,
+            "exitSlotIndex": 19050
+          },
+          {
+            "entryTimestamp": 1633341600000,
+            "exitTimestamp": 1633464000000,
+            "entrySlotIndex": 19629,
+            "exitSlotIndex": 19662
+          },
+          {
+            "entryTimestamp": 1635703200000,
+            "exitTimestamp": 1635825600000,
+            "entrySlotIndex": 20241,
+            "exitSlotIndex": 20274
+          },
+          {
+            "entryTimestamp": 1638057600000,
+            "exitTimestamp": 1638187200000,
+            "entrySlotIndex": 20843,
+            "exitSlotIndex": 20879
+          },
+          {
+            "entryTimestamp": 1640404800000,
+            "exitTimestamp": 1640538000000,
+            "entrySlotIndex": 21429,
+            "exitSlotIndex": 21465
+          },
+          {
+            "entryTimestamp": 1642748400000,
+            "exitTimestamp": 1642881600000,
+            "entrySlotIndex": 22038,
+            "exitSlotIndex": 22068
+          },
+          {
+            "entryTimestamp": 1645092000000,
+            "exitTimestamp": 1645225200000,
+            "entrySlotIndex": 22646,
+            "exitSlotIndex": 22680
+          },
+          {
+            "entryTimestamp": 1647446400000,
+            "exitTimestamp": 1647576000000,
+            "entrySlotIndex": 23255,
+            "exitSlotIndex": 23289
+          },
+          {
+            "entryTimestamp": 1649800800000,
+            "exitTimestamp": 1649934000000,
+            "entrySlotIndex": 23865,
+            "exitSlotIndex": 23901
+          },
+          {
+            "entryTimestamp": 1652158800000,
+            "exitTimestamp": 1652292000000,
+            "entrySlotIndex": 24454,
+            "exitSlotIndex": 24490
+          },
+          {
+            "entryTimestamp": 1654506000000,
+            "exitTimestamp": 1654642800000,
+            "entrySlotIndex": 25061,
+            "exitSlotIndex": 25097
+          },
+          {
+            "entryTimestamp": 1656853200000,
+            "exitTimestamp": 1656990000000,
+            "entrySlotIndex": 25667,
+            "exitSlotIndex": 25702
+          },
+          {
+            "entryTimestamp": 1659193200000,
+            "exitTimestamp": 1659333600000,
+            "entrySlotIndex": 26271,
+            "exitSlotIndex": 26310
+          },
+          {
+            "entryTimestamp": 1661540400000,
+            "exitTimestamp": 1661677200000,
+            "entrySlotIndex": 26886,
+            "exitSlotIndex": 26917
+          },
+          {
+            "entryTimestamp": 1663891200000,
+            "exitTimestamp": 1664028000000,
+            "entrySlotIndex": 27493,
+            "exitSlotIndex": 27524
+          },
+          {
+            "entryTimestamp": 1666242000000,
+            "exitTimestamp": 1666382400000,
+            "entrySlotIndex": 28103,
+            "exitSlotIndex": 28141
+          },
+          {
+            "entryTimestamp": 1668596400000,
+            "exitTimestamp": 1668736800000,
+            "entrySlotIndex": 28713,
+            "exitSlotIndex": 28750
+          },
+          {
+            "entryTimestamp": 1670943600000,
+            "exitTimestamp": 1671087600000,
+            "entrySlotIndex": 29317,
+            "exitSlotIndex": 29355
+          },
+          {
+            "entryTimestamp": 1673290800000,
+            "exitTimestamp": 1673434800000,
+            "entrySlotIndex": 29892,
+            "exitSlotIndex": 29930
+          },
+          {
+            "entryTimestamp": 1675634400000,
+            "exitTimestamp": 1675778400000,
+            "entrySlotIndex": 30495,
+            "exitSlotIndex": 30534
+          },
+          {
+            "entryTimestamp": 1677981600000,
+            "exitTimestamp": 1678125600000,
+            "entrySlotIndex": 31101,
+            "exitSlotIndex": 31141
+          },
+          {
+            "entryTimestamp": 1680328800000,
+            "exitTimestamp": 1680472800000,
+            "entrySlotIndex": 31709,
+            "exitSlotIndex": 31749
+          },
+          {
+            "entryTimestamp": 1682679600000,
+            "exitTimestamp": 1682823600000,
+            "entrySlotIndex": 32302,
+            "exitSlotIndex": 32335
+          },
+          {
+            "entryTimestamp": 1685030400000,
+            "exitTimestamp": 1685178000000,
+            "entrySlotIndex": 32912,
+            "exitSlotIndex": 32945
+          },
+          {
+            "entryTimestamp": 1687381200000,
+            "exitTimestamp": 1687525200000,
+            "entrySlotIndex": 33518,
+            "exitSlotIndex": 33556
+          },
+          {
+            "entryTimestamp": 1689728400000,
+            "exitTimestamp": 1689872400000,
+            "entrySlotIndex": 34124,
+            "exitSlotIndex": 34163
+          },
+          {
+            "entryTimestamp": 1692072000000,
+            "exitTimestamp": 1692216000000,
+            "entrySlotIndex": 34732,
+            "exitSlotIndex": 34771
+          },
+          {
+            "entryTimestamp": 1694415600000,
+            "exitTimestamp": 1694559600000,
+            "entrySlotIndex": 35338,
+            "exitSlotIndex": 35376
+          },
+          {
+            "entryTimestamp": 1696762800000,
+            "exitTimestamp": 1696906800000,
+            "entrySlotIndex": 35946,
+            "exitSlotIndex": 35985
+          },
+          {
+            "entryTimestamp": 1699113600000,
+            "exitTimestamp": 1699257600000,
+            "entrySlotIndex": 36555,
+            "exitSlotIndex": 36594
+          },
+          {
+            "entryTimestamp": 1701464400000,
+            "exitTimestamp": 1701608400000,
+            "entrySlotIndex": 37163,
+            "exitSlotIndex": 37196
+          },
+          {
+            "entryTimestamp": 1703818800000,
+            "exitTimestamp": 1703959200000,
+            "entrySlotIndex": 37756,
+            "exitSlotIndex": 37788
+          },
+          {
+            "entryTimestamp": 1706166000000,
+            "exitTimestamp": 1706310000000,
+            "entrySlotIndex": 38346,
+            "exitSlotIndex": 38383
+          },
+          {
+            "entryTimestamp": 1708513200000,
+            "exitTimestamp": 1708653600000,
+            "entrySlotIndex": 38953,
+            "exitSlotIndex": 38990
+          },
+          {
+            "entryTimestamp": 1710856800000,
+            "exitTimestamp": 1710997200000,
+            "entrySlotIndex": 39561,
+            "exitSlotIndex": 39598
+          },
+          {
+            "entryTimestamp": 1713204000000,
+            "exitTimestamp": 1713344400000,
+            "entrySlotIndex": 40147,
+            "exitSlotIndex": 40184
+          },
+          {
+            "entryTimestamp": 1715554800000,
+            "exitTimestamp": 1715695200000,
+            "entrySlotIndex": 40756,
+            "exitSlotIndex": 40794
+          },
+          {
+            "entryTimestamp": 1717912800000,
+            "exitTimestamp": 1718046000000,
+            "entrySlotIndex": 41365,
+            "exitSlotIndex": 41402
+          },
+          {
+            "entryTimestamp": 1720267200000,
+            "exitTimestamp": 1720400400000,
+            "entrySlotIndex": 41971,
+            "exitSlotIndex": 42008
+          },
+          {
+            "entryTimestamp": 1722614400000,
+            "exitTimestamp": 1722751200000,
+            "entrySlotIndex": 42586,
+            "exitSlotIndex": 42617
+          },
+          {
+            "entryTimestamp": 1724958000000,
+            "exitTimestamp": 1725094800000,
+            "entrySlotIndex": 43194,
+            "exitSlotIndex": 43224
+          },
+          {
+            "entryTimestamp": 1727301600000,
+            "exitTimestamp": 1727438400000,
+            "entrySlotIndex": 43799,
+            "exitSlotIndex": 43836
+          },
+          {
+            "entryTimestamp": 1729648800000,
+            "exitTimestamp": 1729785600000,
+            "entrySlotIndex": 44408,
+            "exitSlotIndex": 44445
+          },
+          {
+            "entryTimestamp": 1732006800000,
+            "exitTimestamp": 1732136400000,
+            "entrySlotIndex": 45019,
+            "exitSlotIndex": 45054
+          },
+          {
+            "entryTimestamp": 1734368400000,
+            "exitTimestamp": 1734494400000,
+            "entrySlotIndex": 45628,
+            "exitSlotIndex": 45661
+          },
+          {
+            "entryTimestamp": 1736726400000,
+            "exitTimestamp": 1736852400000,
+            "entrySlotIndex": 46190,
+            "exitSlotIndex": 46224
+          },
+          {
+            "entryTimestamp": 1739073600000,
+            "exitTimestamp": 1739203200000,
+            "entrySlotIndex": 46796,
+            "exitSlotIndex": 46832
+          },
+          {
+            "entryTimestamp": 1741417200000,
+            "exitTimestamp": 1741550400000,
+            "entrySlotIndex": 47401,
+            "exitSlotIndex": 47438
+          },
+          {
+            "entryTimestamp": 1743764400000,
+            "exitTimestamp": 1743894000000,
+            "entrySlotIndex": 48016,
+            "exitSlotIndex": 48045
+          },
+          {
+            "entryTimestamp": 1746115200000,
+            "exitTimestamp": 1746241200000,
+            "entrySlotIndex": 48603,
+            "exitSlotIndex": 48631
+          },
+          {
+            "entryTimestamp": 1748476800000,
+            "exitTimestamp": 1748599200000,
+            "entrySlotIndex": 49213,
+            "exitSlotIndex": 49246
+          },
+          {
+            "entryTimestamp": 1750838400000,
+            "exitTimestamp": 1750957200000,
+            "entrySlotIndex": 49824,
+            "exitSlotIndex": 49856
+          },
+          {
+            "entryTimestamp": 1753192800000,
+            "exitTimestamp": 1753315200000,
+            "entrySlotIndex": 50431,
+            "exitSlotIndex": 50463
+          },
+          {
+            "entryTimestamp": 1755540000000,
+            "exitTimestamp": 1755666000000,
+            "entrySlotIndex": 51040,
+            "exitSlotIndex": 51073
+          },
+          {
+            "entryTimestamp": 1757883600000,
+            "exitTimestamp": 1758009600000,
+            "entrySlotIndex": 51645,
+            "exitSlotIndex": 51679
+          },
+          {
+            "entryTimestamp": 1760230800000,
+            "exitTimestamp": 1760353200000,
+            "entrySlotIndex": 52253,
+            "exitSlotIndex": 52287
+          },
+          {
+            "entryTimestamp": 1762588800000,
+            "exitTimestamp": 1762704000000,
+            "entrySlotIndex": 52863,
+            "exitSlotIndex": 52895
+          },
+          {
+            "entryTimestamp": 1764950400000,
+            "exitTimestamp": 1765065600000,
+            "entrySlotIndex": 53478,
+            "exitSlotIndex": 53503
+          },
+          {
+            "entryTimestamp": 1767315600000,
+            "exitTimestamp": 1767430800000,
+            "entrySlotIndex": 54060,
+            "exitSlotIndex": 54085
+          },
+          {
+            "entryTimestamp": 1769673600000,
+            "exitTimestamp": 1769788800000,
+            "entrySlotIndex": 54670,
+            "exitSlotIndex": 54701
+          },
+          {
+            "entryTimestamp": 1772017200000,
+            "exitTimestamp": 1772139600000,
+            "entrySlotIndex": 55276,
+            "exitSlotIndex": 55309
+          },
+          {
+            "entryTimestamp": 1774360800000,
+            "exitTimestamp": 1774483200000,
+            "entrySlotIndex": 55884,
+            "exitSlotIndex": 55916
+          },
+          {
+            "entryTimestamp": 1776711600000,
+            "exitTimestamp": 1776830400000,
+            "entrySlotIndex": 56471,
+            "exitSlotIndex": 56502
+          },
+          {
+            "entryTimestamp": 1779069600000,
+            "exitTimestamp": 1779184800000,
+            "entrySlotIndex": 57082,
+            "exitSlotIndex": 57113
+          },
+          {
+            "entryTimestamp": 1781434800000,
+            "exitTimestamp": 1781546400000,
+            "entrySlotIndex": 57693,
+            "exitSlotIndex": 57724
+          },
+          {
+            "entryTimestamp": 1783796400000,
+            "exitTimestamp": 1783908000000,
+            "entrySlotIndex": 58297,
+            "exitSlotIndex": 58328
+          },
+          {
+            "entryTimestamp": 1786147200000,
+            "exitTimestamp": 1786266000000,
+            "entrySlotIndex": 58910,
+            "exitSlotIndex": 58939
+          },
+          {
+            "entryTimestamp": 1788494400000,
+            "exitTimestamp": 1788613200000,
+            "entrySlotIndex": 59521,
+            "exitSlotIndex": 59547
+          },
+          {
+            "entryTimestamp": 1790838000000,
+            "exitTimestamp": 1790956800000,
+            "entrySlotIndex": 60127,
+            "exitSlotIndex": 60158
+          },
+          {
+            "entryTimestamp": 1793188800000,
+            "exitTimestamp": 1793304000000,
+            "entrySlotIndex": 60732,
+            "exitSlotIndex": 60761
+          },
+          {
+            "entryTimestamp": 1795546800000,
+            "exitTimestamp": 1795662000000,
+            "entrySlotIndex": 61338,
+            "exitSlotIndex": 61367
+          },
+          {
+            "entryTimestamp": 1797912000000,
+            "exitTimestamp": 1798027200000,
+            "entrySlotIndex": 61946,
+            "exitSlotIndex": 61975
+          },
+          {
+            "entryTimestamp": 1800273600000,
+            "exitTimestamp": 1800392400000,
+            "entrySlotIndex": 62553,
+            "exitSlotIndex": 62583
+          },
+          {
+            "entryTimestamp": 1802624400000,
+            "exitTimestamp": 1802746800000,
+            "entrySlotIndex": 63157,
+            "exitSlotIndex": 63188
+          },
+          {
+            "entryTimestamp": 1804968000000,
+            "exitTimestamp": 1805094000000,
+            "entrySlotIndex": 63759,
+            "exitSlotIndex": 63791
+          },
+          {
+            "entryTimestamp": 1807315200000,
+            "exitTimestamp": 1807437600000,
+            "entrySlotIndex": 64362,
+            "exitSlotIndex": 64394
+          },
+          {
+            "entryTimestamp": 1809666000000,
+            "exitTimestamp": 1809784800000,
+            "entrySlotIndex": 64967,
+            "exitSlotIndex": 64997
+          },
+          {
+            "entryTimestamp": 1812024000000,
+            "exitTimestamp": 1812142800000,
+            "entrySlotIndex": 65573,
+            "exitSlotIndex": 65603
+          },
+          {
+            "entryTimestamp": 1814385600000,
+            "exitTimestamp": 1814504400000,
+            "entrySlotIndex": 66180,
+            "exitSlotIndex": 66210
+          },
+          {
+            "entryTimestamp": 1816740000000,
+            "exitTimestamp": 1816866000000,
+            "entrySlotIndex": 66785,
+            "exitSlotIndex": 66817
+          },
+          {
+            "entryTimestamp": 1819090800000,
+            "exitTimestamp": 1819216800000,
+            "entrySlotIndex": 67389,
+            "exitSlotIndex": 67421
+          },
+          {
+            "entryTimestamp": 1821434400000,
+            "exitTimestamp": 1821560400000,
+            "entrySlotIndex": 67991,
+            "exitSlotIndex": 68024
+          },
+          {
+            "entryTimestamp": 1823778000000,
+            "exitTimestamp": 1823904000000,
+            "entrySlotIndex": 68594,
+            "exitSlotIndex": 68626
+          },
+          {
+            "entryTimestamp": 1826128800000,
+            "exitTimestamp": 1826254800000,
+            "entrySlotIndex": 69198,
+            "exitSlotIndex": 69230
+          },
+          {
+            "entryTimestamp": 1828490400000,
+            "exitTimestamp": 1828612800000,
+            "entrySlotIndex": 69805,
+            "exitSlotIndex": 69836
+          }
+        ],
+        "id": "transit-1790903146596-ny0u8h"
+      },
+      {
+        "label": "Venus Retrograde",
+        "direction": "DOWN",
+        "probability": "",
+        "color": "#ff9800",
+        "visible": true,
+        "zones": [
+          {
+            "entryTimestamp": 1639915200000,
+            "exitTimestamp": 1643457600000,
+            "entrySlotIndex": 21326,
+            "exitSlotIndex": 22217
+          },
+          {
+            "entryTimestamp": 1690092000000,
+            "exitTimestamp": 1693807200000,
+            "entrySlotIndex": 34216,
+            "exitSlotIndex": 35182
+          },
+          {
+            "entryTimestamp": 1740895200000,
+            "exitTimestamp": 1744524000000,
+            "entrySlotIndex": 47267,
+            "exitSlotIndex": 48209
+          }
+        ],
+        "id": "transit-1790903165083-ge35xm"
+      },
+      {
+        "label": "Mercury Retrograde",
+        "direction": "DOWN",
+        "probability": "",
+        "color": "#ff9800",
+        "visible": true,
+        "zones": [
+          {
+            "entryTimestamp": 1602655200000,
+            "exitTimestamp": 1604426400000,
+            "entrySlotIndex": 11764,
+            "exitSlotIndex": 12223
+          },
+          {
+            "entryTimestamp": 1612029600000,
+            "exitTimestamp": 1613887200000,
+            "entrySlotIndex": 14133,
+            "exitSlotIndex": 14612
+          },
+          {
+            "entryTimestamp": 1622332800000,
+            "exitTimestamp": 1624406400000,
+            "entrySlotIndex": 16781,
+            "exitSlotIndex": 17318
+          },
+          {
+            "entryTimestamp": 1632722400000,
+            "exitTimestamp": 1634580000000,
+            "entrySlotIndex": 19468,
+            "exitSlotIndex": 19951
+          },
+          {
+            "entryTimestamp": 1642161600000,
+            "exitTimestamp": 1643954400000,
+            "entrySlotIndex": 21890,
+            "exitSlotIndex": 22351
+          },
+          {
+            "entryTimestamp": 1652184000000,
+            "exitTimestamp": 1654257600000,
+            "entrySlotIndex": 24461,
+            "exitSlotIndex": 24999
+          },
+          {
+            "entryTimestamp": 1662789600000,
+            "exitTimestamp": 1664712000000,
+            "entrySlotIndex": 27202,
+            "exitSlotIndex": 27703
+          },
+          {
+            "entryTimestamp": 1672315200000,
+            "exitTimestamp": 1674064800000,
+            "entrySlotIndex": 29657,
+            "exitSlotIndex": 30090
+          },
+          {
+            "entryTimestamp": 1682078400000,
+            "exitTimestamp": 1684130400000,
+            "entrySlotIndex": 32146,
+            "exitSlotIndex": 32676
+          },
+          {
+            "entryTimestamp": 1692835200000,
+            "exitTimestamp": 1694822400000,
+            "entrySlotIndex": 34931,
+            "exitSlotIndex": 35443
+          },
+          {
+            "entryTimestamp": 1702468800000,
+            "exitTimestamp": 1704175200000,
+            "entrySlotIndex": 37422,
+            "exitSlotIndex": 37830
+          },
+          {
+            "entryTimestamp": 1712016000000,
+            "exitTimestamp": 1714068000000,
+            "entrySlotIndex": 39838,
+            "exitSlotIndex": 40373
+          },
+          {
+            "entryTimestamp": 1722837600000,
+            "exitTimestamp": 1724889600000,
+            "entrySlotIndex": 42641,
+            "exitSlotIndex": 43175
+          },
+          {
+            "entryTimestamp": 1732600800000,
+            "exitTimestamp": 1734307200000,
+            "entrySlotIndex": 45173,
+            "exitSlotIndex": 45611
+          },
+          {
+            "entryTimestamp": 1742040000000,
+            "exitTimestamp": 1744027200000,
+            "entrySlotIndex": 47563,
+            "exitSlotIndex": 48082
+          },
+          {
+            "entryTimestamp": 1752818400000,
+            "exitTimestamp": 1754913600000,
+            "entrySlotIndex": 50335,
+            "exitSlotIndex": 50877
+          },
+          {
+            "entryTimestamp": 1762732800000,
+            "exitTimestamp": 1764439200000,
+            "entrySlotIndex": 52903,
+            "exitSlotIndex": 53340
+          },
+          {
+            "entryTimestamp": 1772107200000,
+            "exitTimestamp": 1774051200000,
+            "entrySlotIndex": 55300,
+            "exitSlotIndex": 55802
+          },
+          {
+            "entryTimestamp": 1782756000000,
+            "exitTimestamp": 1784851200000,
+            "entrySlotIndex": 58034,
+            "exitSlotIndex": 58575
+          }
+        ],
+        "id": "transit-1790903171353-yn5d0x"
+      }
+    ]
+  }
+}
