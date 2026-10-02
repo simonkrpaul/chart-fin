@@ -23,10 +23,14 @@ dist-ssr
 *.sln
 *.sw?
 
-# Large data files (load via RemoteLoader or local file upload)
-# NOTE: ignore the *contents* of public/data/ (not the dir itself) so we can
-# selectively re-include folders like templates/ below. Negating a path inside
-# a fully-excluded directory does not work in git.
+# Public assets — ignore everything by default. Only chart templates and
+# assets referenced by index.html are tracked; raw market data (CSV/parquet)
+# and local-only icons stay out of git. Negating a path inside a fully-
+# excluded directory does not work, so we re-admit each parent directory
+# before re-admitting its children.
+public/*
+!public/favicon.svg
+!public/data/
 public/data/*
 !public/data/templates/
 *.parquet
