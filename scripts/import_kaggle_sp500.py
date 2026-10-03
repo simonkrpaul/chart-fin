@@ -111,6 +111,15 @@ def _resolve_input_path(path: pathlib.Path | None) -> pathlib.Path | None:
     return alt if alt.exists() else path
 
 
+def _display_path(path: pathlib.Path) -> pathlib.Path:
+    """Show paths inside the repo relative to its root; otherwise show absolute."""
+    resolved = path.resolve()
+    try:
+        return resolved.relative_to(REPO_ROOT)
+    except ValueError:
+        return resolved
+
+
 # ── Timestamp normalisation ────────────────────────────────────────────────
 
 def to_unix_ms(date_str: str) -> int | None:
@@ -371,7 +380,7 @@ def main() -> None:
     if args.companies and not companies:
         print(f"[warn] no rows parsed from {args.companies}", file=sys.stderr)
 
-    print(f"[plan] splitting {args.input.relative_to(REPO_ROOT)} → "
+    print(f"[plan] splitting {_display_path(args.input)} → "
           f"{US_EQUITY_DIR.relative_to(REPO_ROOT)}/  (mode={mode})")
     t0 = time.time()
     n_syms, n_rows, n_older = split_master(args.input, mode, companies)
