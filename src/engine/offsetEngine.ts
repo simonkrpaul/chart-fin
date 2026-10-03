@@ -23,6 +23,11 @@ import type {
 } from '../types';
 import { TIMEFRAME_MINUTES } from './calendarEngine';
 
+/** Midnight UTC of the calendar day containing `ms`. */
+function _utcDayFloor(ms: number): number {
+  return Math.floor(ms / 86_400_000) * 86_400_000;
+}
+
 /**
  * Find the primary slot index whose timestamp is closest to targetMs.
  * If targetMs is within toleranceMs of a slot, returns that integer index.
@@ -101,6 +106,9 @@ export function buildOffsetOverlay(
       if (!dateSlotMap.has(key)) dateSlotMap.set(key, i);
     }
   }
+  const lastSlotDayMs = primarySlots.length > 0
+    ? _utcDayFloor(primarySlots[primarySlots.length - 1].timestamp)
+    : 0;
 
   // Determine anchor candle close for normalization modes
   let anchorClose: number | null = null;
@@ -131,9 +139,17 @@ export function buildOffsetOverlay(
       const found = dateSlotMap.get(key);
       if (found !== undefined) {
         projectedSlotIndex = found;
+      } else if (_utcDayFloor(projectedTs) > lastSlotDayMs) {
+        // Past the last bar. Extrapolate on whole UTC days: daily slots sit at
+        // 12:00 UTC while daily bars arrive at 00:00 UTC, so the 12 h tolerance
+        // in nearestOrVirtualSlotIndex would alias the next day onto the final
+        // slot and stack two overlay candles on the latest bar.
+        projectedSlotIndex = (primarySlots.length - 1)
+          + (_utcDayFloor(projectedTs) - lastSlotDayMs) / avgIntervalMs;
       } else {
-        // Date not in primary range – either before the first slot or beyond the last bar.
-        // Let nearestOrVirtualSlotIndex handle forward extrapolation.
+        // Date inside the chart range but absent from the map (e.g. a weekend
+        // while gaps are hidden) – snap to the nearest slot so the overlay
+        // stays visually continuous across the gap.
         projectedSlotIndex = nearestOrVirtualSlotIndex(primarySlots, projectedTs, toleranceMs, avgIntervalMs);
       }
     } else {
