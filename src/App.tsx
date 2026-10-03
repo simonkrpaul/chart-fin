@@ -24,7 +24,7 @@ import { useResizeObserver } from './hooks/useResizeObserver';
 import { useKeyboardShortcuts } from './hooks/useKeyboardShortcuts';
 import { usePersistence } from './hooks/usePersistence';
 import { useLazyBackfill } from './hooks/useLazyBackfill';
-import { requestPersistentStorage } from './db/marketStore';
+import { requestPersistentStorage, ensureCandleCacheVersion } from './db/marketStore';
 import { restoreLastSession, markBootReady } from './store/chartSession';
 import { ensureMarkets } from './db/marketDb';
 import { seedTemplatesFromManifest } from './db/templateManager';
@@ -59,6 +59,13 @@ function AppInner() {
         await ensureMarkets();
       } catch (err) {
         console.error('[boot] ensureMarkets failed — continuing without preset markets', err);
+      }
+      try {
+        if (await ensureCandleCacheVersion()) {
+          console.info('[boot] candle cache cleared (parser fix) — series will re-read from CSV');
+        }
+      } catch (err) {
+        console.warn('[boot] candle cache version check failed', err);
       }
       // Pull any committed-in-repo templates into IDB (idempotent).
       // Non-blocking — fire-and-forget so restoreLastSession can run in parallel.

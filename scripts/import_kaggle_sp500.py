@@ -20,29 +20,31 @@ Output schema
 
 Usage
 ─────
-    # First-time full import (default: skip files that already exist)
+    # Import / update — writes only rows newer than each file's last ts.
+    # Same command works for the first-time import and every daily refresh.
     python scripts/import_kaggle_sp500.py \\
         --companies public/data/usstock/sp500_companies.csv
 
-    # ★ Daily update — only writes rows newer than each file's last ts.
-    # This is the fast path for re-running against a refreshed Kaggle dump.
-    python scripts/import_kaggle_sp500.py --mode append \\
+    python scripts/import_kaggle_sp500.py \\
         --input public/data/usstock/sp500_stocks.csv
 
     # Rewrite everything (use after schema changes or corrupted files)
     python scripts/import_kaggle_sp500.py --mode overwrite
+
+    # Leave existing files untouched, only add brand-new symbols
+    python scripts/import_kaggle_sp500.py --mode skip
 
     # Just rebuild manifest.json (after moving files around)
     python scripts/import_kaggle_sp500.py --rebuild-manifest-only
 
 Modes
 ─────
-    skip       (default) Existing per-symbol files are left untouched. Only
-               brand-new symbols get written. Safe to run on a partial import.
-    append     For each symbol, reads the last row of the existing CSV,
-               then only appends rows with a strictly greater timestamp.
+    append     (default) For each symbol, reads the last row of the existing
+               CSV, then only appends rows with a strictly greater timestamp.
                Cheap tail-read (~4 KB per file); typically < 5 s for a full
                daily update of the S&P 500.
+    skip       Existing per-symbol files are left untouched. Only brand-new
+               symbols get written. Use to guard a partial import.
     overwrite  Every symbol file is rewritten from scratch. Use for schema
                changes, adjustment fixes, or when you don't trust the current
                files.
@@ -106,7 +108,7 @@ def _resolve_input_path(path: pathlib.Path | None) -> pathlib.Path | None:
     if path is None:
         return None
     if path.is_absolute() or path.exists():
-        return path
+        return path.resolve()
     alt = REPO_ROOT / path
     return alt if alt.exists() else path
 
@@ -167,8 +169,8 @@ def load_companies(path: pathlib.Path | None) -> dict[str, dict]:
 
 # ── Streaming split ────────────────────────────────────────────────────────
 
-MODE_SKIP     = "skip"       # default: existing files untouched, only new symbols written
-MODE_APPEND   = "append"     # per-symbol: append rows with ts > last existing ts
+MODE_SKIP     = "skip"       # existing files untouched, only new symbols written
+MODE_APPEND   = "append"     # default: append rows with ts > last existing ts
 MODE_OVERWRITE = "overwrite"  # rewrite every symbol file from scratch
 
 
@@ -299,20 +301,31 @@ def split_master(input_path: pathlib.Path, mode: str,
                 fh.close()
 
     # Write sidecar meta so the manifest can pick up sector/company.
-    for sym, (_, n, _cutoff) in writers.items():
+    for sym, (_, n, cutoff) in writers.items():
         info = companies.get(sym) or companies.get(sym.replace(".", "-")) or {}
-        if info:
-            (US_EQUITY_DIR / f"{_safe_filename(sym)}.meta.json").write_text(
-                json.dumps({
-                    "exchange":    "US Equity",
-                    "description": info.get("company") or sym,
-                    "sector":      info.get("sector"),
-                    "industry":    info.get("sub_industry"),
-                    "headquarters": info.get("headquarters"),
-                    "founded":     info.get("founded"),
-                    "row_count":   n,
-                }, indent=2)
-            )
+        if not info:
+            continue
+        meta_path = US_EQUITY_DIR / f"{_safe_filename(sym)}.meta.json"
+        # On append runs `n` is only this run's rows, so keep the prior total.
+        row_count = n
+        if cutoff is not None and meta_path.exists():
+            try:
+                prev = json.loads(meta_path.read_text()).get("row_count")
+                if isinstance(prev, int):
+                    row_count = prev + n
+            except (OSError, json.JSONDecodeError):
+                pass
+        meta_path.write_text(
+            json.dumps({
+                "exchange":    "US Equity",
+                "description": info.get("company") or sym,
+                "sector":      info.get("sector"),
+                "industry":    info.get("sub_industry"),
+                "headquarters": info.get("headquarters"),
+                "founded":     info.get("founded"),
+                "row_count":   row_count,
+            }, indent=2)
+        )
 
     if skipped_symbols:
         print(f"[skip] {len(skipped_symbols)} symbols already had CSVs "
@@ -350,10 +363,10 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--companies", type=pathlib.Path, default=None,
                    help="Optional Kaggle companies CSV for sector/industry sidecar metadata")
     p.add_argument("--mode", choices=[MODE_SKIP, MODE_APPEND, MODE_OVERWRITE],
-                   default=MODE_SKIP,
-                   help="skip: leave existing files alone (default) · "
-                        "append: only write rows newer than each file's last ts "
-                        "(fast daily-update path) · "
+                   default=None,
+                   help="append: only write rows newer than each file's last ts "
+                        "(default; fast daily-update path) · "
+                        "skip: leave existing files alone, only add new symbols · "
                         "overwrite: rewrite every symbol file from scratch")
     # Backwards-compat alias.
     p.add_argument("--overwrite", action="store_true",
@@ -372,9 +385,8 @@ def main() -> None:
     args.input = _resolve_input_path(args.input) or args.input
     args.companies = _resolve_input_path(args.companies)
 
-    mode = args.mode
-    if args.overwrite and mode == MODE_SKIP:
-        mode = MODE_OVERWRITE
+    # Explicit --mode always wins; --overwrite is the legacy shorthand.
+    mode = args.mode or (MODE_OVERWRITE if args.overwrite else MODE_APPEND)
 
     companies = load_companies(args.companies)
     if args.companies and not companies:

@@ -505,6 +505,19 @@ export async function clearCandleCache(): Promise<void> {
   await tx.done;
 }
 
+// Bump when a parser bug may have written bad rows into the cache.
+// v2: pre-2001 ms timestamps were mis-read as seconds (×1000 → year 33,000+).
+const CANDLE_CACHE_VERSION = 2;
+
+/** Wipe cached candles once if they were written by an older (buggy) parser. */
+export async function ensureCandleCacheVersion(): Promise<boolean> {
+  const current = await getSetting<number>('candleCacheVersion');
+  if (current === CANDLE_CACHE_VERSION) return false;
+  await clearCandleCache();
+  await setSetting('candleCacheVersion', CANDLE_CACHE_VERSION);
+  return true;
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Layouts (chart snapshots)
 // ─────────────────────────────────────────────────────────────────────────────

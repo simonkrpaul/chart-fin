@@ -101,8 +101,14 @@ export async function openSeries(
     const tfMs = TIMEFRAME_MINUTES[tf] * 60_000;
     const estSlots = Math.ceil((last - first) / tfMs);
     const SLOT_LIMIT = 1_500_000;
-    if (INTRADAY_TIMEFRAMES.includes(tf) && estSlots > SLOT_LIMIT) {
+    if (estSlots > SLOT_LIMIT) {
       const years = ((last - first) / (365.25 * 86_400_000)).toFixed(1);
+      if (!INTRADAY_TIMEFRAMES.includes(tf)) {
+        return {
+          ok: false, rows: 0,
+          message: `${market}/${symbol} @ ${tf} spans ${years} years — the data contains invalid timestamps (first=${new Date(first).toISOString()}, last=${last}). Check the CSV and click ↻ Rescan disk.`,
+        };
+      }
       const safeDays = Math.floor((SLOT_LIMIT * TIMEFRAME_MINUTES[tf]) / (24 * 60));
       return {
         ok: false, rows: 0,
