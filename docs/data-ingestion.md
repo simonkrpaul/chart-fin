@@ -670,23 +670,26 @@ date,open,high,low,close,volume,symbol
 
 | `--mode` | Behaviour | When to use |
 | --- | --- | --- |
-| `skip` (default) | Existing per-symbol files are left untouched. New symbols added. | First-time import; guard against accidental overwrites |
-| **`append`** | For each symbol, reads its file's last timestamp, then only writes rows with a strictly greater ts. | **Daily updates** against a refreshed Kaggle dump |
+| **`append`** (default) | For each symbol, reads its file's last timestamp, then only writes rows with a strictly greater ts. | First-time import **and** every daily update against a refreshed Kaggle dump |
+| `skip` | Existing per-symbol files are left untouched. New symbols added. | Guard a partial import against any change to existing files |
 | `overwrite` | Every symbol file rewritten from scratch. | Schema changes, adjustment fixes, corrupt files |
 
 ### Run
 
 ```bash
-# First-time import — split, enrich with companies metadata, rebuild manifest
+# Import / update — appends only rows newer than each file's last ts.
+# The same command covers the first import and every daily refresh.
 python scripts/import_kaggle_sp500.py \
     --companies public/data/usstock/sp500_companies.csv
 
-# ★ Daily update — appends only new rows since the last run
-python scripts/import_kaggle_sp500.py --mode append \
+python scripts/import_kaggle_sp500.py \
     --input public/data/usstock/sp500_stocks.csv
 
 # Full rewrite (e.g. after adjustment change)
 python scripts/import_kaggle_sp500.py --mode overwrite
+
+# Leave existing files untouched, only add brand-new symbols
+python scripts/import_kaggle_sp500.py --mode skip
 
 # Just rebuild manifest.json (after moving files around)
 python scripts/import_kaggle_sp500.py --rebuild-manifest-only
@@ -702,13 +705,12 @@ Once the initial import is done, this becomes your **one-command daily routine**
 #         unzip public/data/usstock/sp-500-stocks.zip -d public/data/usstock/
 
 # 2. Append-only import — writes only new bars per symbol
-python scripts/import_kaggle_sp500.py --mode append
+python scripts/import_kaggle_sp500.py
 
 # 3. In the running app: 📈 Open chart → ↻ Rescan disk
-#    The browser's manifest re-ingest is ALSO delta-aware: it checks the
-#    existing (firstTs, lastTs) per series and only writes rows outside that
-#    range. So an unchanged file is a no-op; a file with 1 new row is a 1-row
-#    write. No re-parsing of 25 years of data.
+#    This also clears the browser's candle cache, so the next open of each
+#    symbol re-reads its CSV. Without it the chart keeps serving the rows
+#    IndexedDB cached on the previous run and your new bars won't show.
 ```
 
 Expected output for a typical daily update (~500 symbols × 1 new row each):
@@ -732,7 +734,7 @@ Typical run: **≈ 30 seconds** for the full ~500 symbols, ~2.9 M rows.
 ### Progress output
 
 ```
-[plan] splitting public/data/usstock/sp500_stocks.csv → public/data/markets/us_equity/  (mode=skip)
+[plan] splitting public/data/usstock/sp500_stocks.csv → public/data/markets/us_equity/  (mode=append)
 [progress] 500,000 rows · 500 symbols · 6.2s elapsed
 [progress] 1,000,000 rows · 500 symbols · 12.4s elapsed
 …

@@ -64,6 +64,7 @@ const DEFAULT_DEPTH_DAYS: Record<Timeframe, number | null> = {
 };
 
 const LS_DEPTH_KEY = 'chartfin.picker.depthDaysByTf.v1';
+const INTRADAY_TFS = new Set<Timeframe>(['1m', '5m', '10m', '15m', '1h', '4h']);
 
 function readSavedDepth(): Partial<Record<Timeframe, number | null>> {
   try {
@@ -419,6 +420,8 @@ export const ChartPicker: React.FC = () => {
                   })}
                 </select>
                 {(() => {
+                  // "All" on D/W/M is at most tens of thousands of bars — never risky.
+                  if (depthDays === null && !INTRADAY_TFS.has(tf)) return <div style={{ marginBottom: 6 }} />;
                   const bars = depthToBarCount(tf, depthDays);
                   const barsLabel = bars === Infinity ? 'All available' : `${bars.toLocaleString()}`;
                   // Hard limit matches the openSeries guard: beyond ~1.5M slots
