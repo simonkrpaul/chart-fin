@@ -13,6 +13,7 @@ import { useChartStore } from '../store/chartStore';
 import { computeCorrelation, scanBestCorrelation } from '../engine/correlationEngine';
 import type { OffsetOverlayConfig, OverlayMode } from '../types';
 import type { ScanOutput, ScanMode } from '../engine/correlationEngine';
+import { randomId } from '../utils/id';
 
 const MODES: OverlayMode[] = ['overlay', 'normalized', 'percent', 'index100'];
 // Moon sidereal cycle (27.32 d) multiples — kept separate so they don't
@@ -135,7 +136,7 @@ export const OverlayPanel: React.FC = () => {
     }
 
     const config: OffsetOverlayConfig = {
-      id: crypto.randomUUID(),
+      id: randomId(),
       label: `${days}d from ${anchor}`,
       sourceStartTimestamp: sourceStartMs,
       sourceEndTimestamp: sourceEndMs,

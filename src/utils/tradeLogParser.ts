@@ -11,6 +11,7 @@
  *   Market, Order Quantity, Entry Price, Traded Price, Realized P&L, Trade Type, Trade Time
  */
 import type { TradeLogEntry, TradeLogDirection, TradeLogAction, TradeLogRoundTrip, CandleSlot } from '../types';
+import { randomId } from './id';
 
 /**
  * Detect format and parse accordingly.
@@ -71,7 +72,7 @@ function _parseFormatB(lines: string[]): TradeLogEntry[] {
     // so the entry appears before exit on the chart. Use 1 minute offset.
     const entryTimestamp = exitTimestamp - 60_000;
 
-    const id = crypto.randomUUID();
+    const id = randomId();
 
     // Create open entry
     entries.push({
@@ -167,7 +168,7 @@ function _parseFormatA(lines: string[]): TradeLogEntry[] {
     if (!timestamp) continue;
 
     entries.push({
-      id: transactionId.trim() || crypto.randomUUID(),
+      id: transactionId.trim() || randomId(),
       timestamp,
       direction: tradeDirection,
       action: tradeAction,

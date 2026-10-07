@@ -18,6 +18,7 @@ import type { StoreApi } from 'zustand';
 import { immer } from 'zustand/middleware/immer';
 import { chartRegistry } from './chartRegistry';
 import { useLayoutStore } from './layoutStore';
+import { randomId } from '../utils/id';
 import type {
   CandleSlot,
   ChartLayout,
@@ -931,7 +932,7 @@ export function createChartStore(panelId: string = 'p1'): StoreApi<ChartState & 
       });
 
       const config: import('../types').OffsetOverlayConfig = {
-        id: crypto.randomUUID(),
+        id: randomId(),
         label: `Pattern ${new Date(sourceStartMs).toLocaleDateString()}`,
         sourceStartTimestamp: sourceStartMs,
         sourceEndTimestamp: sourceEndMs,
@@ -1695,7 +1696,7 @@ export function createChartStore(panelId: string = 'p1'): StoreApi<ChartState & 
     exportLayout: () => {
       const s = get();
       return {
-        id: crypto.randomUUID(),
+        id: randomId(),
         name: 'Untitled Layout',
         timeframe: s.timeframe,
         series: s.currentSeries ? { ...s.currentSeries } : undefined,
