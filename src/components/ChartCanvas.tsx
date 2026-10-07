@@ -33,13 +33,14 @@ import {
   renderEphemerisMarkers,
   renderTransitZones,
 } from '../renderer/canvasRenderer';
+import { randomId } from '../utils/id';
 
 interface Props {
   width: number;
   height: number;
 }
 
-let nextDrawingId = () => crypto.randomUUID();
+let nextDrawingId = () => randomId();
 
 export const ChartCanvas: React.FC<Props> = ({ width, height }) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
