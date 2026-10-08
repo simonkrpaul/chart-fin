@@ -69,7 +69,7 @@ parser.add_argument(
 args = parser.parse_args()
 
 # ── Paths ─────────────────────────────────────────────────────────────────
-REPO_ROOT = pathlib.Path(__file__).parent.parent
+REPO_ROOT = pathlib.Path(__file__).resolve().parent.parent
 MARKETS_ROOT = REPO_ROOT / "public" / "data" / "markets"
 OUT_DIR = MARKETS_ROOT / "crypto"
 OUT_DIR.mkdir(parents=True, exist_ok=True)
@@ -77,7 +77,7 @@ OUT_DIR.mkdir(parents=True, exist_ok=True)
 # Shared helper: rebuilds public/data/markets/manifest.json so the Chart
 # Picker sees the new symbol on refresh.
 import sys as _sys
-_sys.path.insert(0, str(pathlib.Path(__file__).parent))
+_sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 try:
     from _manifest import rebuild_manifest as _rebuild_manifest  # noqa: E402
 except ImportError:
@@ -228,9 +228,9 @@ def resample(df_ms: pd.DataFrame, rule: str, label: str = "left") -> pd.DataFram
         "close":  "last",
         "volume": "sum",
     }).dropna(subset=["open", "close"])
-    # Preserve the millisecond epoch exactly. `astype("int64")` on a datetime64[ms, UTC]
-    # index already yields the correct Unix-ms value; dividing by 1_000_000 corrupts it.
-    ohlcv["timestamp"] = ohlcv.index.astype("int64")
+    # Index is datetime64[ns]; as_unit("ms") before astype(int64) so we emit
+    # 13-digit Unix ms, not 19-digit ns.
+    ohlcv["timestamp"] = ohlcv.index.as_unit("ms").astype("int64")
     return ohlcv[["timestamp", "open", "high", "low", "close", "volume"]].reset_index(drop=True)
 
 # ── Write files ───────────────────────────────────────────────────────────
@@ -261,7 +261,7 @@ meta_path.write_text(json.dumps({
 print(f"  Written {meta_path.relative_to(REPO_ROOT)}")
 
 if _rebuild_manifest is not None:
-    _rebuild_manifest(MARKETS_ROOT)
+    _rebuild_manifest(MARKETS_ROOT, repo_root=REPO_ROOT)
     print("  ✓ manifest.json rebuilt.")
 else:
     print("  ! _manifest.py not found — manifest NOT rebuilt.")

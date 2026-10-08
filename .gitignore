@@ -30,6 +30,10 @@ dist-ssr
 # before re-admitting its children.
 public/*
 !public/favicon.svg
+!public/manifest.webmanifest
+!public/sw.js
+!public/icons/
+public/data/*
 !public/data/templates/
 *.parquet
 *.csv

@@ -116,6 +116,20 @@ export const ChartCanvas: React.FC<Props> = ({ width, height }) => {
   const dragPan = useRef<{ startX: number; startY: number; accumulated: number; onPriceAxis: boolean } | null>(null);
   const [isDragging, setIsDragging] = useState(false);
 
+  // ── Multi-touch gesture state ────────────────────────────────────────────
+  // Every live pointer, keyed by pointerId. size >= 2 means a pinch is in
+  // progress and the single-pointer pan/draw path must stay out of the way.
+  const activePointers = useRef<Map<number, { x: number; y: number }>>(new Map());
+  const pinch = useRef<{
+    axis: 'x' | 'y';
+    lastDist: number;
+    lastMidX: number;
+    midAccum: number;
+    anchorSlot: number;
+  } | null>(null);
+  // Long-press replaces right-click on touch devices.
+  const longPress = useRef<{ timer: number; x: number; y: number } | null>(null);
+
   // Prevents mouseup from committing a drawing on the same click that started it
   const justStartedDrawing = useRef(false);
 
@@ -310,10 +324,10 @@ export const ChartCanvas: React.FC<Props> = ({ width, height }) => {
     };
   }
 
-  // ── Mouse / touch events ─────────────────────────────────────────────────
+  // ── Pointer events (mouse + touch + pen unified) ─────────────────────────
 
   const handleMouseMove = useCallback(
-    (e: React.MouseEvent) => {
+    (e: React.PointerEvent) => {
       const rect = (e.target as HTMLCanvasElement).getBoundingClientRect();
       const x = e.clientX - rect.left;
       const y = e.clientY - rect.top;
@@ -584,7 +598,7 @@ export const ChartCanvas: React.FC<Props> = ({ width, height }) => {
   );
 
   const handleMouseDown = useCallback(
-    (e: React.MouseEvent) => {
+    (e: React.PointerEvent) => {
       const rect = (e.target as HTMLCanvasElement).getBoundingClientRect();
       const x = e.clientX - rect.left;
       const y = e.clientY - rect.top;
@@ -854,23 +868,186 @@ export const ChartCanvas: React.FC<Props> = ({ width, height }) => {
     [viewport, resetPriceScale],
   );
 
+  /** Opens the drawing context menu at a viewport coordinate, if one is hit. */
+  const openContextMenuAt = useCallback(
+    (clientX: number, clientY: number) => {
+      if (activeDrawingTool !== 'none') return;
+      const canvas = canvasRef.current;
+      if (!canvas) return;
+      const rect = canvas.getBoundingClientRect();
+      const hit = showIndicatorsAndDrawings
+        ? hitTestDrawings(clientX - rect.left, clientY - rect.top, drawings, viewport, priceScale)
+        : null;
+      setContextMenu(hit ? { x: clientX, y: clientY, drawingId: hit } : null);
+    },
+    [activeDrawingTool, drawings, viewport, priceScale, showIndicatorsAndDrawings],
+  );
+
   const handleContextMenu = useCallback(
     (e: React.MouseEvent) => {
       e.preventDefault();
-      if (activeDrawingTool !== 'none') return;
-      const rect = (e.target as HTMLCanvasElement).getBoundingClientRect();
-      const x = e.clientX - rect.left;
-      const y = e.clientY - rect.top;
-      const hit = showIndicatorsAndDrawings
-        ? hitTestDrawings(x, y, drawings, viewport, priceScale)
-        : null;
-      if (hit) {
-        setContextMenu({ x: e.clientX, y: e.clientY, drawingId: hit });
-      } else {
-        setContextMenu(null);
+      openContextMenuAt(e.clientX, e.clientY);
+    },
+    [openContextMenuAt],
+  );
+
+  // ── Gesture dispatch ─────────────────────────────────────────────────────
+  // Wraps the single-pointer handlers above with multi-touch bookkeeping so
+  // one finger pans/draws, two fingers pinch-zoom, and a long press stands in
+  // for right-click.
+
+  const LONG_PRESS_MS = 500;
+  const LONG_PRESS_SLOP = 10;
+
+  const cancelLongPress = useCallback(() => {
+    if (longPress.current) {
+      clearTimeout(longPress.current.timer);
+      longPress.current = null;
+    }
+  }, []);
+
+  /** Abort any in-flight single-pointer interaction when a pinch starts. */
+  const abortSinglePointer = useCallback(() => {
+    dragPan.current = null;
+    draggingDrawing.current = null;
+    patternDragStart.current = null;
+    patternDragEnd.current = null;
+    setIsDragging(false);
+    setCrosshair({ visible: false });
+  }, [setCrosshair]);
+
+  const handlePointerDown = useCallback(
+    (e: React.PointerEvent) => {
+      const rect = e.currentTarget.getBoundingClientRect();
+      activePointers.current.set(e.pointerId, {
+        x: e.clientX - rect.left,
+        y: e.clientY - rect.top,
+      });
+
+      if (activePointers.current.size === 2) {
+        cancelLongPress();
+        abortSinglePointer();
+        const [a, b] = [...activePointers.current.values()];
+        const dx = Math.abs(a.x - b.x);
+        const dy = Math.abs(a.y - b.y);
+        const midX = (a.x + b.x) / 2;
+        pinch.current = {
+          axis: dy > dx ? 'y' : 'x',
+          lastDist: Math.max(1, Math.hypot(a.x - b.x, a.y - b.y)),
+          lastMidX: midX,
+          midAccum: 0,
+          anchorSlot: screenXToSlotIndex(midX),
+        };
+        return;
+      }
+      if (activePointers.current.size > 2) return;
+
+      e.currentTarget.setPointerCapture(e.pointerId);
+
+      if (e.pointerType !== 'mouse') {
+        const { clientX, clientY } = e;
+        longPress.current = {
+          x: clientX,
+          y: clientY,
+          timer: window.setTimeout(() => {
+            longPress.current = null;
+            abortSinglePointer();
+            openContextMenuAt(clientX, clientY);
+          }, LONG_PRESS_MS),
+        };
+      }
+
+      handleMouseDown(e);
+    },
+    [handleMouseDown, openContextMenuAt, cancelLongPress, abortSinglePointer, viewport],
+  );
+
+  const handlePointerMove = useCallback(
+    (e: React.PointerEvent) => {
+      const rect = e.currentTarget.getBoundingClientRect();
+      const px = e.clientX - rect.left;
+      const py = e.clientY - rect.top;
+      if (activePointers.current.has(e.pointerId)) {
+        activePointers.current.set(e.pointerId, { x: px, y: py });
+      }
+
+      const p = pinch.current;
+      if (p && activePointers.current.size >= 2) {
+        const [a, b] = [...activePointers.current.values()];
+        const dist = Math.max(1, Math.hypot(a.x - b.x, a.y - b.y));
+        const midX = (a.x + b.x) / 2;
+
+        if (p.axis === 'x') {
+          // Fingers apart → ratio < 1 → fewer visible slots → zoom in.
+          // `zoom` rounds to whole slots, so only consume the distance once it
+          // actually produced a change, otherwise small pinches feel sticky.
+          const ratio = p.lastDist / dist;
+          const delta = (ratio - 1) * 10;
+          const projected = Math.round(viewport.visibleSlotCount * (1 + delta * 0.1));
+          if (projected !== viewport.visibleSlotCount) {
+            zoom(delta, p.anchorSlot);
+            p.lastDist = dist;
+          }
+        } else {
+          const ratio = p.lastDist / dist;
+          if (Math.abs(ratio - 1) > 0.01) {
+            scalePrice(Math.max(0.5, Math.min(2, ratio)));
+            p.lastDist = dist;
+          }
+        }
+
+        // Midpoint travel pans regardless of pinch axis.
+        p.midAccum += (p.lastMidX - midX) / sw;
+        const slotDelta = Math.round(p.midAccum);
+        if (slotDelta !== 0) {
+          pan(slotDelta);
+          p.midAccum -= slotDelta;
+        }
+        p.lastMidX = midX;
+        return;
+      }
+
+      if (longPress.current) {
+        const moved = Math.hypot(e.clientX - longPress.current.x, e.clientY - longPress.current.y);
+        if (moved > LONG_PRESS_SLOP) cancelLongPress();
+      }
+
+      handleMouseMove(e);
+    },
+    [handleMouseMove, cancelLongPress, zoom, pan, scalePrice, viewport, sw],
+  );
+
+  const handlePointerUp = useCallback(
+    (e: React.PointerEvent) => {
+      activePointers.current.delete(e.pointerId);
+      cancelLongPress();
+      if (e.currentTarget.hasPointerCapture(e.pointerId)) {
+        e.currentTarget.releasePointerCapture(e.pointerId);
+      }
+
+      if (pinch.current) {
+        // Keep swallowing input until every finger is lifted, so the leftover
+        // pointer doesn't suddenly jump the chart into a one-finger pan.
+        if (activePointers.current.size < 2) pinch.current = null;
+        if (activePointers.current.size > 0) return;
+        return;
+      }
+
+      handleMouseUp();
+    },
+    [handleMouseUp, cancelLongPress],
+  );
+
+  const handlePointerLeave = useCallback(
+    (e: React.PointerEvent) => {
+      activePointers.current.delete(e.pointerId);
+      cancelLongPress();
+      if (activePointers.current.size === 0) {
+        pinch.current = null;
+        handleMouseLeave();
       }
     },
-    [activeDrawingTool, drawings, viewport, priceScale, showIndicatorsAndDrawings],
+    [handleMouseLeave, cancelLongPress],
   );
 
   return (
@@ -880,6 +1057,11 @@ export const ChartCanvas: React.FC<Props> = ({ width, height }) => {
         data-chart-canvas
         style={{
           display: 'block',
+          // Without this the browser claims drag/pinch for page scroll and
+          // zoom, and no pointermove ever reaches the chart on touch.
+          touchAction: 'none',
+          WebkitUserSelect: 'none',
+          userSelect: 'none',
           cursor: (activeDrawingTool === 'long_position' || activeDrawingTool === 'short_position') && drawingInProgress
             ? 'ns-resize'
             : activeDrawingTool !== 'none'
@@ -894,10 +1076,11 @@ export const ChartCanvas: React.FC<Props> = ({ width, height }) => {
                     : 'move'
                   : 'grab',
         }}
-        onMouseMove={handleMouseMove}
-        onMouseDown={handleMouseDown}
-        onMouseUp={handleMouseUp}
-        onMouseLeave={handleMouseLeave}
+        onPointerMove={handlePointerMove}
+        onPointerDown={handlePointerDown}
+        onPointerUp={handlePointerUp}
+        onPointerCancel={handlePointerUp}
+        onPointerLeave={handlePointerLeave}
         onDoubleClick={handleDblClick}
         onContextMenu={handleContextMenu}
       />
