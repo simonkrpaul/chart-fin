@@ -83,7 +83,18 @@ export function resampleCandles(
 
   // Trading-day (calendar) start at `boundaryHour` in `boundaryTz`, returned
   // as midnight UTC of that trading day so the bar label matches TV / MT5.
+  // All tz offsets are multiples of 15 min, so the result is constant within a 15-min window.
+  let lastWindow = Number.NaN;
+  let lastDayStart = 0;
   const forexTradingDayStartMs = (ts: number): number => {
+    const window = Math.floor(ts / 900_000);
+    if (window === lastWindow) return lastDayStart;
+    lastWindow = window;
+    lastDayStart = computeTradingDayStartMs(ts);
+    return lastDayStart;
+  };
+
+  const computeTradingDayStartMs = (ts: number): number => {
     const local = toZonedTime(new Date(ts), boundaryTz);
     // toZonedTime returns a "fake local" date whose *displayed* fields are
     // the wall-clock values in boundaryTz — read them via the local getters.

@@ -8,19 +8,28 @@
  * in the given IANA timezone.  The numeric value of the returned Date is NOT
  * a valid UTC timestamp – it is only suitable for calendar arithmetic.
  */
+const _formatterCache = new Map<string, Intl.DateTimeFormat>();
+
+function _getFormatter(tz: string): Intl.DateTimeFormat {
+  let f = _formatterCache.get(tz);
+  if (!f) {
+    f = new Intl.DateTimeFormat('en-US', {
+      timeZone: tz,
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+      hour12: false,
+    });
+    _formatterCache.set(tz, f);
+  }
+  return f;
+}
+
 export function toZonedTime(utcDate: Date, tz: string): Date {
-  // Use Intl to get year/month/day/hour/minute/second in the target tz
-  const formatter = new Intl.DateTimeFormat('en-US', {
-    timeZone: tz,
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-    second: '2-digit',
-    hour12: false,
-  });
-  const parts = formatter.formatToParts(utcDate);
+  const parts = _getFormatter(tz).formatToParts(utcDate);
   const get = (t: string) => parseInt(parts.find(p => p.type === t)!.value, 10);
   return new Date(get('year'), get('month') - 1, get('day'), get('hour'), get('minute'), get('second'));
 }
