@@ -17,8 +17,9 @@ import { TradeJournalPanel } from './TradeJournalPanel';
 import { EphemerisPanel } from './EphemerisPanel';
 import { CycleCombinerPanel } from './CycleCombinerPanel';
 import { HurstCyclesPanel } from '../hurst/HurstCyclesPanel';
+import { ScriptsPanel } from './ScriptsPanel';
 
-type TabKey = 'indicators' | 'backtest' | 'overlays' | 'journal' | 'ephemeris' | 'cycles' | 'hurst';
+type TabKey = 'indicators' | 'backtest' | 'overlays' | 'journal' | 'ephemeris' | 'cycles' | 'hurst' | 'scripts';
 
 interface TabDef {
   key: TabKey;
@@ -35,6 +36,7 @@ const TABS: TabDef[] = [
   { key: 'ephemeris',  label: 'Ephemeris',       icon: '○□△', render: () => <EphemerisPanel /> },
   { key: 'cycles',     label: 'Cycle Combiner',  icon: '🌀', render: () => <CycleCombinerPanel /> },
   { key: 'hurst',      label: 'Hurst Cycles',    icon: '〰️', render: () => <HurstCyclesPanel /> },
+  { key: 'scripts',    label: 'Data Scripts',    icon: '⟳', render: () => <ScriptsPanel /> },
 ];
 
 const LS_TAB = 'chartfin.sidebar.activeTab';
