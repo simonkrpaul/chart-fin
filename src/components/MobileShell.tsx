@@ -6,6 +6,7 @@
 import React, { useCallback, useContext, useState } from 'react';
 import { useChartStore, ChartStoreContext } from '../store/chartStore';
 import { downloadChartPng } from '../renderer/chartExport';
+import { useUiPrefs } from '../store/uiPrefsStore';
 import { useResizeObserver } from '../hooks/useResizeObserver';
 import { ChartCanvas } from './ChartCanvas';
 import { CandleTooltip } from './CandleTooltip';
@@ -39,6 +40,8 @@ export const MobileShell: React.FC = () => {
   } = useChartStore();
   const { ref, width, height } = useResizeObserver<HTMLDivElement>();
   const [sheet, setSheet] = useState<Sheet>(null);
+  const showInfoBar = useUiPrefs(s => s.showInfoBar);
+  const setShowInfoBar = useUiPrefs(s => s.setShowInfoBar);
 
   const isDark = theme === 'dark';
   const bg = themeTokens.background;
@@ -269,6 +272,10 @@ export const MobileShell: React.FC = () => {
                   <button style={rowBtn} onClick={toggleEmptyGapSlots}>
                     <span>Gaps</span>
                     <span>{gapVisibility === 'session_trading_days' ? 'Trading days' : 'Calendar days'}</span>
+                  </button>
+                  <button style={rowBtn} onClick={() => setShowInfoBar(!showInfoBar)}>
+                    <span>Info bar (OHLC)</span>
+                    <span>{showInfoBar ? 'On' : 'Off'}</span>
                   </button>
                   <div style={row}>
                     <span>Timezone</span>

@@ -3,8 +3,11 @@
  */
 import React from 'react';
 import { useChartStore } from '../store/chartStore';
+import { useUiPrefs } from '../store/uiPrefsStore';
 
 export const CandleTooltip: React.FC = () => {
+  const showInfoBar = useUiPrefs(s => s.showInfoBar);
+  const setShowInfoBar = useUiPrefs(s => s.setShowInfoBar);
   const {
     crosshair, primarySlots, theme, overlayConfigs, overlays, showOverlays,
     session, timeframe, showIndicatorsAndDrawings, currentSeries, rawCandles,
@@ -18,6 +21,27 @@ export const CandleTooltip: React.FC = () => {
   const bull = '#26a69a';
   const bear = '#ef5350';
 
+  const toggleBtn: React.CSSProperties = {
+    background: 'transparent', border: 'none', color: text, opacity: 0.6,
+    cursor: 'pointer', fontSize: 13, lineHeight: 1, padding: '2px 4px', minWidth: 24, minHeight: 24,
+  };
+
+  if (!showInfoBar) {
+    return (
+      <button
+        onClick={() => setShowInfoBar(true)}
+        title="Show info bar (symbol, OHLC, volume)"
+        aria-label="Show info bar"
+        style={{
+          ...toggleBtn, position: 'absolute', top: 20, left: 6, background: bg, borderRadius: 12,
+          opacity: 0.8, boxShadow: '0 1px 4px rgba(0,0,0,0.2)',
+        }}
+      >
+        ⓘ
+      </button>
+    );
+  }
+
   // Prefer the DB-loaded series identity; fall back to whatever the raw
   // candles carry (works for CSV files that only set `symbol` per row).
   const seriesLabel = currentSeries
@@ -30,6 +54,14 @@ export const CandleTooltip: React.FC = () => {
     <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginBottom: 2 }}>
       <strong style={{ fontSize: 13 }}>{seriesLabel}</strong>
       <span style={{ fontSize: 11, opacity: 0.7 }}>{timeframe}</span>
+      <button
+        onClick={() => setShowInfoBar(false)}
+        title="Hide info bar"
+        aria-label="Hide info bar"
+        style={{ ...toggleBtn, marginLeft: 'auto', alignSelf: 'center' }}
+      >
+        ✕
+      </button>
     </div>
   );
 
