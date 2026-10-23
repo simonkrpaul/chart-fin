@@ -35,6 +35,7 @@ import type {
   CycleCombinerOutput,
 } from '../types';
 import { FIBONACCI_DEFAULT_LEVELS } from '../types';
+import { TIMEFRAME_MINUTES } from '../engine/calendarEngine';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Coordinate helpers
@@ -46,6 +47,8 @@ export interface RenderContext {
   priceScale: PriceScale;
   theme: ThemeTokens;
   dpr: number; // device pixel ratio
+  /** True when painting a high-resolution export; labels may be denser/smaller. */
+  hiRes?: boolean;
   timeframe: Timeframe;
   /** IANA timezone used for slot generation and axis labels (e.g. "America/New_York", "UTC") */
   timezone: string;
@@ -130,89 +133,85 @@ export function renderBackground(rc: RenderContext, slots: CandleSlot[]): void {
 // In-chart hour labels (intraday only) – thin vertical tick + hour at chart top
 // ─────────────────────────────────────────────────────────────────────────────
 
-export function renderHourLabels(rc: RenderContext, slots: CandleSlot[]): void {
-  const isIntraday = rc.timeframe !== '1d' && rc.timeframe !== '1w' && rc.timeframe !== '1M';
-  if (!isIntraday || slots.length === 0) return;
+const HOUR_STEPS = [1, 2, 3, 4, 6, 12, 24];
+
+function slotTimestamp(slots: CandleSlot[], si: number, avgIntervalMs: number): number {
+  if (si < slots.length) return slots[si].timestamp;
+  return slots[slots.length - 1].timestamp + (si - slots.length + 1) * avgIntervalMs;
+}
+
+function avgSlotInterval(slots: CandleSlot[]): number {
+  return slots.length > 1
+    ? (slots[slots.length - 1].timestamp - slots[0].timestamp) / (slots.length - 1)
+    : 60_000;
+}
+
+/**
+ * `ticks` draws the faint vertical guides (call before candles);
+ * `labels` draws the hour numbers on a backing strip (call after candles).
+ */
+export function renderHourLabels(rc: RenderContext, slots: CandleSlot[], layer: 'ticks' | 'labels'): void {
+  const tfMin = TIMEFRAME_MINUTES[rc.timeframe];
+  if (tfMin >= 1440 || slots.length === 0) return;
 
   const { ctx, viewport: vp, theme } = rc;
   const sw = slotWidth(vp);
   const ph = vp.mainPaneHeight;
   const pw = vp.width - vp.priceAxisWidth;
-  const tz = rc.timezone;
+  const avgIntervalMs = avgSlotInterval(slots);
+  const hourFmt = new Intl.DateTimeFormat('en-US', { hour: '2-digit', hourCycle: 'h23', timeZone: rc.timezone });
 
-  // Average interval for extrapolating virtual future slots
-  const avgIntervalMs = slots.length > 1
-    ? (slots[slots.length - 1].timestamp - slots[0].timestamp) / (slots.length - 1)
-    : 60_000;
-
-  // For 1h candles, label every candle. For sub-hour, label at each hour boundary.
-  const is1hCandle = avgIntervalMs >= 3_500_000 && avgIntervalMs <= 3_700_000; // ~1 hour
-
-  let lastHour = '';
-
+  // Shrink the font as candles get narrower; hi-res exports can go much smaller and still be legible when zoomed.
+  const pxPerHour = tfMin <= 60 ? sw * (60 / tfMin) : sw;
+  const fontSize = Math.max(rc.hiRes ? 5 : 9, Math.min(11, Math.floor(pxPerHour / 1.4)));
   ctx.save();
-  ctx.font = '9px -apple-system, sans-serif';
+  ctx.font = `${fontSize}px -apple-system, sans-serif`;
+  const labelW = ctx.measureText('00').width + 3;
+  const step = tfMin <= 60 ? (HOUR_STEPS.find(s => s * pxPerHour >= labelW) ?? 24) : 1;
+  const bandH = fontSize + 5;
+
+  if (layer === 'labels') {
+    ctx.globalAlpha = 0.85;
+    ctx.fillStyle = theme.background;
+    ctx.fillRect(0, 0, pw, bandH);
+    ctx.globalAlpha = 1;
+  }
   ctx.textAlign = 'center';
   ctx.textBaseline = 'top';
 
+  let lastHour = '';
+  let lastX = -Infinity;
   for (let i = 0; i < vp.visibleSlotCount; i++) {
     const si = vp.firstSlotIndex + i;
-    const ts = si < slots.length
-      ? slots[si].timestamp
-      : slots.length > 0
-        ? slots[slots.length - 1].timestamp + (si - slots.length + 1) * avgIntervalMs
-        : 0;
+    const ts = slotTimestamp(slots, si, avgIntervalMs);
     if (!ts) continue;
+    const hour = hourFmt.format(ts);
+    if (hour === lastHour) continue;
+    lastHour = hour;
+    if (Number(hour) % step !== 0) continue;
 
-    const d = new Date(ts);
-    const hourStr = d.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false, timeZone: tz });
-    const hour = hourStr.split(':')[0];
+    const x = i * sw + sw / 2;
+    if (x < 0 || x > pw || x - lastX < labelW) continue;
+    lastX = x;
 
-    if (is1hCandle) {
-      // Every candle is 1 hour — label every single one
-      const x = i * sw + sw / 2;
-      if (x < 0 || x > pw) continue;
-
-      // Subtle vertical tick line
+    if (layer === 'ticks') {
       ctx.strokeStyle = theme.gridLine;
       ctx.lineWidth = 1;
-      ctx.globalAlpha = 0.15;
+      ctx.globalAlpha = hour === '00' ? 0.5 : 0.25;
       ctx.setLineDash([2, 4]);
       ctx.beginPath();
-      ctx.moveTo(x, 12);
+      ctx.moveTo(x, bandH);
       ctx.lineTo(x, ph);
       ctx.stroke();
       ctx.setLineDash([]);
-
-      // Hour number on every candle
-      ctx.globalAlpha = 0.7;
-      ctx.fillStyle = theme.axisText;
-      ctx.fillText(hour, x, 2);
+      ctx.globalAlpha = 1;
     } else {
-      // Sub-hour timeframe: label at each new hour boundary
-      if (hour === lastHour) continue;
-      lastHour = hour;
-
-      const x = i * sw + sw / 2;
-      if (x < 0 || x > pw) continue;
-
-      ctx.strokeStyle = theme.gridLine;
-      ctx.lineWidth = 1;
-      ctx.globalAlpha = 0.2;
-      ctx.setLineDash([2, 4]);
-      ctx.beginPath();
-      ctx.moveTo(x, 12);
-      ctx.lineTo(x, ph);
-      ctx.stroke();
-      ctx.setLineDash([]);
-
-      ctx.globalAlpha = 0.7;
+      ctx.font = `${hour === '00' ? 'bold ' : ''}${fontSize}px -apple-system, sans-serif`;
       ctx.fillStyle = theme.axisText;
       ctx.fillText(hour, x, 2);
     }
   }
 
-  ctx.globalAlpha = 1;
   ctx.restore();
 }
 
@@ -251,6 +250,9 @@ export function renderPriceAxis(rc: RenderContext): void {
 // Time axis
 // ─────────────────────────────────────────────────────────────────────────────
 
+// Intraday axis steps in minutes; each must be a whole number of candles to land on slots.
+const TIME_STEPS_MIN = [1, 2, 5, 10, 15, 30, 60, 120, 180, 240, 360, 720, 1440];
+
 export function renderTimeAxis(rc: RenderContext, slots: CandleSlot[]): void {
   const { ctx, viewport: vp, theme } = rc;
   const sw = slotWidth(vp);
@@ -268,80 +270,124 @@ export function renderTimeAxis(rc: RenderContext, slots: CandleSlot[]): void {
   ctx.lineTo(pw, y0);
   ctx.stroke();
 
-  ctx.fillStyle = theme.axisText;
-  ctx.font = '10px -apple-system, sans-serif';
-  ctx.textAlign = 'center';
-
-  // Label density: ~80px per label
-  const labelInterval = Math.max(1, Math.floor(80 / sw));
-  let lastYear = '';
-  let lastMonth = '';
-
-  // Average interval for extrapolating timestamps of virtual future slots
-  const avgIntervalMs = slots.length > 1
-    ? (slots[slots.length - 1].timestamp - slots[0].timestamp) / (slots.length - 1)
-    : 60_000;
-
-  for (let i = 0; i < vp.visibleSlotCount; i += labelInterval) {
-    const si = vp.firstSlotIndex + i;
-    // For virtual slots past the last primary slot, extrapolate the timestamp
-    const ts = si < slots.length
-      ? slots[si].timestamp
-      : slots.length > 0
-        ? slots[slots.length - 1].timestamp + (si - slots.length + 1) * avgIntervalMs
-        : 0;
-    if (!ts) continue;
-    const d = new Date(ts);
-    const x = i * sw + sw / 2;
-    let label: string;
-
-    if (rc.timeframe === '1M') {
-      const yr  = String(d.getUTCFullYear());
-      const mon = d.toLocaleDateString('en-US', { month: 'short', timeZone: 'UTC' });
-      label = yr !== lastYear ? `${mon} ${yr}` : mon;
-      lastYear = yr;
-    } else if (rc.timeframe === '1w') {
-      const mon = d.toLocaleDateString('en-US', { month: 'short', timeZone: 'UTC' });
-      const day = d.getUTCDate();
-      const yr  = String(d.getUTCFullYear());
-      label = mon !== lastMonth ? `${mon} ${day}` : String(day);
-      if (mon !== lastMonth) { lastMonth = mon; lastYear = yr; }
-    } else if (rc.timeframe === '1d') {
-      const mon = d.toLocaleDateString('en-US', { month: 'short', timeZone: 'UTC' });
-      const day = d.getUTCDate();
-      label = mon !== lastMonth ? `${mon} ${day}` : String(day);
-      lastMonth = mon;
-    } else {
-      // Intraday: show date/time in the session timezone
-      const dateStr = d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', timeZone: tz });
-      const timeStr = d.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false, timeZone: tz });
-      label = dateStr !== lastMonth ? dateStr : timeStr;
-      lastMonth = dateStr;
-    }
-
-    ctx.fillText(label, x, y0 + 15);
-  }
-
   // ── Timezone badge – bottom-right of time axis, left of price axis border ──
   const tzAbbr = (() => {
     try {
-      // Get short offset string, e.g. "GMT-4" or "UTC"
       const parts = new Intl.DateTimeFormat('en-US', { timeZoneName: 'shortOffset', timeZone: tz })
         .formatToParts(new Date());
       const offset = parts.find(p => p.type === 'timeZoneName')?.value ?? tz;
-      // Also get the city/region short name for display, e.g. "New York" from "America/New_York"
       const city = tz.includes('/') ? tz.split('/').pop()!.replace(/_/g, ' ') : tz;
       return `${city} (${offset})`;
     } catch {
       return tz;
     }
   })();
+  ctx.font = '10px -apple-system, sans-serif';
+  const badgeLeft = pw - 6 - ctx.measureText(tzAbbr).width - 8;
+
+  const avgIntervalMs = avgSlotInterval(slots);
+  const tfMin = TIMEFRAME_MINUTES[rc.timeframe];
+  const minSpacing = rc.hiRes ? 48 : 80;
+  ctx.fillStyle = theme.axisText;
+  ctx.textAlign = 'center';
+
+  if (tfMin < 1440 && slots.length > 0) {
+    // Two rows: HH:MM on top, date underneath whenever the day changes.
+    const fmt = new Intl.DateTimeFormat('en-US', {
+      month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', hourCycle: 'h23', timeZone: tz,
+    });
+    const needMin = ((rc.hiRes ? 40 : 60) / sw) * tfMin;
+    const stepMin = TIME_STEPS_MIN.find(s => s >= needMin && s % tfMin === 0) ?? null;
+    const datesOnly = stepMin === null || stepMin >= 1440;
+
+    let lastDate = '';
+    let lastX = -Infinity;
+    let pendingDate: string | null = null;
+    for (let i = 0; i < vp.visibleSlotCount; i++) {
+      const ts = slotTimestamp(slots, vp.firstSlotIndex + i, avgIntervalMs);
+      if (!ts) continue;
+      const parts = fmt.formatToParts(ts);
+      const get = (t: string) => parts.find(p => p.type === t)?.value ?? '';
+      const hh = get('hour');
+      const mm = get('minute');
+      const date = `${get('month')} ${get('day')}`;
+      const newDay = date !== lastDate;
+      lastDate = date;
+      if (newDay) pendingDate = date;
+
+      const minuteOfDay = Number(hh) * 60 + Number(mm);
+      const onStep = stepMin !== null && minuteOfDay % stepMin === 0;
+      if (!onStep && !newDay) continue;
+      if (datesOnly && !pendingDate) continue;
+
+      const x = i * sw + sw / 2;
+      if (x < 0 || x - lastX < (rc.hiRes ? 40 : 60) || x + 16 > pw) continue;
+      lastX = x;
+
+      ctx.globalAlpha = 0.6;
+      ctx.beginPath();
+      ctx.moveTo(x, y0);
+      ctx.lineTo(x, y0 + 3);
+      ctx.strokeStyle = theme.axisText;
+      ctx.stroke();
+      ctx.globalAlpha = 1;
+
+      if (datesOnly) {
+        if (!pendingDate) continue;
+        ctx.font = 'bold 11px -apple-system, sans-serif';
+        ctx.fillText(pendingDate, x, y0 + 15);
+        pendingDate = null;
+        continue;
+      }
+      ctx.font = '11px -apple-system, sans-serif';
+      ctx.fillText(`${hh}:${mm}`, x, y0 + 13);
+      if (pendingDate && x + 22 < badgeLeft) {
+        ctx.font = 'bold 10px -apple-system, sans-serif';
+        ctx.fillText(pendingDate, x, y0 + 26);
+        pendingDate = null;
+      }
+    }
+  } else {
+    ctx.font = '11px -apple-system, sans-serif';
+    const labelInterval = Math.max(1, Math.floor(minSpacing / sw));
+    let lastYear = '';
+    let lastMonth = '';
+
+    for (let i = 0; i < vp.visibleSlotCount; i += labelInterval) {
+      const ts = slots.length > 0 ? slotTimestamp(slots, vp.firstSlotIndex + i, avgIntervalMs) : 0;
+      if (!ts) continue;
+      const d = new Date(ts);
+      const x = i * sw + sw / 2;
+      if (x + 16 > pw) continue;
+      let label: string;
+
+      if (rc.timeframe === '1M') {
+        const yr  = String(d.getUTCFullYear());
+        const mon = d.toLocaleDateString('en-US', { month: 'short', timeZone: 'UTC' });
+        label = yr !== lastYear ? `${mon} ${yr}` : mon;
+        lastYear = yr;
+      } else if (rc.timeframe === '1w') {
+        const mon = d.toLocaleDateString('en-US', { month: 'short', timeZone: 'UTC' });
+        const day = d.getUTCDate();
+        const yr  = String(d.getUTCFullYear());
+        label = mon !== lastMonth ? `${mon} ${day}` : String(day);
+        if (mon !== lastMonth) { lastMonth = mon; lastYear = yr; }
+      } else {
+        const mon = d.toLocaleDateString('en-US', { month: 'short', timeZone: 'UTC' });
+        const day = d.getUTCDate();
+        label = mon !== lastMonth ? `${mon} ${day}` : String(day);
+        lastMonth = mon;
+      }
+
+      ctx.fillText(label, x, y0 + 17);
+    }
+  }
 
   ctx.font = '10px -apple-system, sans-serif';
   ctx.textAlign = 'right';
   ctx.fillStyle = theme.axisText;
   ctx.globalAlpha = 0.55;
-  ctx.fillText(tzAbbr, pw - 6, y0 + 15);
+  ctx.fillText(tzAbbr, pw - 6, y0 + 26);
   ctx.globalAlpha = 1;
 }
 

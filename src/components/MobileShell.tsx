@@ -3,8 +3,9 @@
  * full-bleed chart, bottom tab bar, and panels in slide-up sheets.
  * Reuses the desktop panels and chart store unchanged.
  */
-import React, { useCallback, useState } from 'react';
-import { useChartStore } from '../store/chartStore';
+import React, { useCallback, useContext, useState } from 'react';
+import { useChartStore, ChartStoreContext } from '../store/chartStore';
+import { downloadChartPng } from '../renderer/chartExport';
 import { useResizeObserver } from '../hooks/useResizeObserver';
 import { ChartCanvas } from './ChartCanvas';
 import { CandleTooltip } from './CandleTooltip';
@@ -47,14 +48,10 @@ export const MobileShell: React.FC = () => {
 
   const close = useCallback(() => setSheet(null), []);
 
+  const chartStore = useContext(ChartStoreContext);
   const handleScreenshot = useCallback(() => {
-    const canvas = document.querySelector<HTMLCanvasElement>('[data-chart-canvas]');
-    if (!canvas) return;
-    const link = document.createElement('a');
-    link.download = `chart-${new Date().toISOString().slice(0, 19).replace(/[T:]/g, '-')}.png`;
-    link.href = canvas.toDataURL('image/png');
-    link.click();
-  }, []);
+    void downloadChartPng(chartStore);
+  }, [chartStore]);
 
   const iconBtn = (disabled = false): React.CSSProperties => ({
     minWidth: TOUCH, height: TOUCH, border: 'none', background: 'transparent',

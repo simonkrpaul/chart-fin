@@ -1,8 +1,9 @@
 /**
  * Toolbar – drawing tool selector and timeframe switcher.
  */
-import React, { useCallback, useRef, useState } from 'react';
-import { useChartStore } from '../store/chartStore';
+import React, { useCallback, useContext, useRef, useState } from 'react';
+import { useChartStore, ChartStoreContext } from '../store/chartStore';
+import { downloadChartPng } from '../renderer/chartExport';
 import { ChartPicker } from './ChartPicker';
 import { LayoutManager } from './LayoutManager';
 import { TemplateManager } from './TemplateManager';
@@ -38,14 +39,10 @@ export const Toolbar: React.FC = () => {
   const accent = '#2962ff';
   const border = theme === 'dark' ? '#2a2e39' : '#e0e3eb';
 
+  const chartStore = useContext(ChartStoreContext);
   const handleScreenshot = useCallback(() => {
-    const canvas = document.querySelector<HTMLCanvasElement>('[data-chart-canvas]');
-    if (!canvas) return;
-    const link = document.createElement('a');
-    link.download = `chart-${new Date().toISOString().slice(0, 19).replace(/[T:]/g, '-')}.png`;
-    link.href = canvas.toDataURL('image/png');
-    link.click();
-  }, []);
+    void downloadChartPng(chartStore);
+  }, [chartStore]);
 
   const btn = (active: boolean): React.CSSProperties => ({
     background: active ? accent : 'transparent',

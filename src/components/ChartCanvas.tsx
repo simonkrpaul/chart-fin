@@ -5,8 +5,9 @@
  * Uses requestAnimationFrame-based rendering with dirty-flag optimization:
  * only re-renders when relevant state changes.
  */
-import React, { useRef, useEffect, useCallback, useState } from 'react';
-import { useChartStore } from '../store/chartStore';
+import React, { useRef, useEffect, useCallback, useState, useContext } from 'react';
+import { useChartStore, ChartStoreContext } from '../store/chartStore';
+import { registerChartExporter } from '../renderer/chartExport';
 import { useHurstStore } from '../hurst/hurstStore';
 import { renderHurst } from '../hurst/renderer';
 import type { Drawing, DrawingPoint } from '../types';
@@ -162,15 +163,11 @@ export const ChartCanvas: React.FC<Props> = ({ width, height }) => {
 
   // ── Render loop ──────────────────────────────────────────────────────────
 
-  const render = useCallback(() => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    const dpr = window.devicePixelRatio || 1;
-    const ctx = canvas.getContext('2d')!;
+  const paint = useCallback((ctx: CanvasRenderingContext2D, scale: number, forExport: boolean) => {
     ctx.save();
-    ctx.scale(dpr, dpr);
+    ctx.scale(scale, scale);
 
-    const rc = { ctx, viewport, priceScale, theme: themeTokens, dpr, timeframe, timezone: session.timezone, replayIndex: replay.active ? replay.index : undefined, showEmptyGapSlots };
+    const rc = { ctx, viewport, priceScale, theme: themeTokens, dpr: scale, hiRes: forExport, timeframe, timezone: session.timezone, replayIndex: replay.active ? replay.index : undefined, showEmptyGapSlots };
     const slotW = (viewport.width - viewport.priceAxisWidth) / viewport.visibleSlotCount;
     const allDrawings = showIndicatorsAndDrawings
       ? (drawingInProgress ? [...drawings, drawingInProgress] : drawings)
@@ -189,7 +186,7 @@ export const ChartCanvas: React.FC<Props> = ({ width, height }) => {
       : [];
 
     renderBackground(rc, primarySlots);
-    renderHourLabels(rc, primarySlots);
+    renderHourLabels(rc, primarySlots, 'ticks');
     if (offsetConfluenceHighlight && visibleOverlays.length >= 2) {
       renderOffsetConfluenceHighlight(rc, visibleOverlays as any);
     }
@@ -244,9 +241,10 @@ export const ChartCanvas: React.FC<Props> = ({ width, height }) => {
     }
 
     renderReplayCursor(rc);
+    renderHourLabels(rc, primarySlots, 'labels');
     renderPriceAxis(rc);
     renderTimeAxis(rc, primarySlots);
-    renderCrosshair(rc, crosshair);
+    if (!forExport) renderCrosshair(rc, crosshair);
 
     ctx.restore();
   }, [
@@ -283,6 +281,22 @@ export const ChartCanvas: React.FC<Props> = ({ width, height }) => {
     hurstConfig,
     hurstOutput,
   ]);
+
+  const render = useCallback(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    paint(canvas.getContext('2d')!, window.devicePixelRatio || 1, false);
+  }, [paint]);
+
+  const store = useContext(ChartStoreContext);
+  useEffect(() => {
+    if (!store) return;
+    return registerChartExporter(store, {
+      width,
+      height,
+      paint: (ctx, scale) => paint(ctx, scale, true),
+    });
+  }, [store, paint, width, height]);
 
   useEffect(() => {
     rafRef.current = requestAnimationFrame(render);
