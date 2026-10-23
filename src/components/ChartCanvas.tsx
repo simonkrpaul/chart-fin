@@ -155,11 +155,13 @@ export const ChartCanvas: React.FC<Props> = ({ width, height }) => {
     }
   }, [showIndicatorsAndDrawings]);
 
+  const showVolume = showIndicatorsAndDrawings && indicatorConfigs.some(c => c.type === 'VOLUME' && c.visible);
+
   // Keep viewport size in sync with container
   useEffect(() => {
-    const ph = height - 30 - 120; // subtract timeAxisHeight, subPaneHeight
-    setViewport({ width, mainPaneHeight: ph });
-  }, [width, height]);
+    const subPaneHeight = showVolume ? 120 : 0;
+    setViewport({ width, mainPaneHeight: height - 30 - subPaneHeight, subPaneHeight });
+  }, [width, height, showVolume]);
 
   // ── Render loop ──────────────────────────────────────────────────────────
 
@@ -191,7 +193,7 @@ export const ChartCanvas: React.FC<Props> = ({ width, height }) => {
       renderOffsetConfluenceHighlight(rc, visibleOverlays as any);
     }
     renderCandles(rc, primarySlots);
-    renderVolume(rc, primarySlots);
+    if (showVolume) renderVolume(rc, primarySlots);
     if (cycleCombinerConfig.visible && cycleCombinerOutput) {
       renderCycleCombiner(rc, cycleCombinerOutput, cycleCombinerConfig.color);
     }
@@ -265,6 +267,7 @@ export const ChartCanvas: React.FC<Props> = ({ width, height }) => {
     replay,
     showIndicatorsAndDrawings,
     showEmptyGapSlots,
+    showVolume,
     showOverlays,
     offsetConfluenceHighlight,
     hoveredId,
