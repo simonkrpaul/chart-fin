@@ -71,6 +71,21 @@ function fmtOffset(tz: string): string {
   }
 }
 
+export const TimezoneNativeSelect: React.FC<{ style?: React.CSSProperties }> = ({ style }) => {
+  const { session, setTimezone } = useChartStore();
+  const known = TZ_GROUPS.some(g => g.zones.some(z => z.tz === session.timezone));
+  return (
+    <select value={session.timezone} onChange={e => setTimezone(e.target.value)} style={style}>
+      {!known && <option value={session.timezone}>{session.timezone}</option>}
+      {TZ_GROUPS.map(g => (
+        <optgroup key={g.group} label={g.group}>
+          {g.zones.map(z => <option key={z.tz} value={z.tz}>{z.label} ({fmtOffset(z.tz)})</option>)}
+        </optgroup>
+      ))}
+    </select>
+  );
+};
+
 export const TimezoneSelector: React.FC = () => {
   const { session, setTimezone, theme } = useChartStore();
   const currentTz = session.timezone;

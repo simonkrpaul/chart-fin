@@ -20,6 +20,8 @@ import { BacktestReport } from './components/BacktestReport';
 import { GoToDateDialog } from './components/GoToDateDialog';
 import { LayoutGrid } from './components/LayoutGrid';
 import { Sidebar } from './components/Sidebar';
+import { MobileShell } from './components/MobileShell';
+import { useIsMobile } from './hooks/useIsMobile';
 import { useResizeObserver } from './hooks/useResizeObserver';
 import { useKeyboardShortcuts } from './hooks/useKeyboardShortcuts';
 import { usePersistence } from './hooks/usePersistence';
@@ -37,11 +39,47 @@ let _bootRan = false;
 // that Toolbar, sidebar panels, and keyboard shortcuts all operate on the
 // currently-selected chart.
 // ─────────────────────────────────────────────────────────────────────────────
-function AppInner() {
-  const { themeTokens } = useChartStore();
+function DesktopShell() {
   const { layoutType } = useLayoutStore();
   const singlePanel = layoutType === '1';
   const { ref, width, height } = useResizeObserver<HTMLDivElement>();
+
+  return (
+    <>
+      <Toolbar />
+      <div style={{ display: 'flex', flex: 1, overflow: 'hidden' }}>
+        {/* Left sidebar – icon rail + single active panel (always targets the active chart) */}
+        <Sidebar />
+
+        {/* Chart area */}
+        {singlePanel ? (
+          /* Single-panel: legacy layout with BacktestReport below canvas */
+          <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+            <div ref={ref} style={{ flex: 1, position: 'relative', overflow: 'hidden' }}>
+              {width > 0 && height > 0 && (
+                <>
+                  <ChartCanvas width={width} height={height} />
+                  <CandleTooltip />
+                  <ChartControls />
+                  <ReplayControls />
+                  <MeasurementOverlay />
+                </>
+              )}
+            </div>
+            <BacktestReport />
+          </div>
+        ) : (
+          /* Multi-panel grid */
+          <LayoutGrid />
+        )}
+      </div>
+    </>
+  );
+}
+
+function AppInner() {
+  const { themeTokens } = useChartStore();
+  const isMobile = useIsMobile();
   useKeyboardShortcuts();
   useLazyBackfill();
 
@@ -120,35 +158,9 @@ function AppInner() {
         fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
       }}
     >
-      <Toolbar />
       <IngestProgressBadge />
       <GoToDateDialog open={goToDateOpen} onClose={closeGoToDate} />
-      <div style={{ display: 'flex', flex: 1, overflow: 'hidden' }}>
-        {/* Left sidebar – icon rail + single active panel (always targets the active chart) */}
-        <Sidebar />
-
-        {/* Chart area */}
-        {singlePanel ? (
-          /* Single-panel: legacy layout with BacktestReport below canvas */
-          <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
-            <div ref={ref} style={{ flex: 1, position: 'relative', overflow: 'hidden' }}>
-              {width > 0 && height > 0 && (
-                <>
-                  <ChartCanvas width={width} height={height} />
-                  <CandleTooltip />
-                  <ChartControls />
-                  <ReplayControls />
-                  <MeasurementOverlay />
-                </>
-              )}
-            </div>
-            <BacktestReport />
-          </div>
-        ) : (
-          /* Multi-panel grid */
-          <LayoutGrid />
-        )}
-      </div>
+      {isMobile ? <MobileShell /> : <DesktopShell />}
     </div>
   );
 }

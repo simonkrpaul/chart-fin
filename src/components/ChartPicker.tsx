@@ -24,6 +24,7 @@ import type { ChartLayout, Timeframe } from '../types';
 import { TIMEFRAME_MINUTES } from '../engine/calendarEngine';
 import { MARKET_PRESET_LIST } from '../engine/marketPresets';
 import { IngestionPanel } from './IngestionPanel';
+import { isMobileViewport, useIsMobile } from '../hooks/useIsMobile';
 
 // Seed the picker synchronously with preset markets so the dropdown is
 // never empty — even if the async manifest/IDB load fails outright.
@@ -66,6 +67,17 @@ const DEFAULT_DEPTH_DAYS: Record<Timeframe, number | null> = {
 const LS_DEPTH_KEY = 'chartfin.picker.depthDaysByTf.v1';
 const INTRADAY_TFS = new Set<Timeframe>(['1m', '5m', '10m', '15m', '1h', '4h']);
 
+// Phones have far less heap than desktops, so default to shorter windows.
+const MOBILE_MAX_DEFAULT_DAYS = 365;
+const WARN_BARS = { desktop: 500_000, mobile: 150_000 };
+const BLOCK_BARS = { desktop: 1_500_000, mobile: 500_000 };
+
+function defaultDepthDays(tf: Timeframe): number | null {
+  const d = DEFAULT_DEPTH_DAYS[tf];
+  if (!isMobileViewport() || !INTRADAY_TFS.has(tf)) return d;
+  return d === null ? MOBILE_MAX_DEFAULT_DAYS : Math.min(d, MOBILE_MAX_DEFAULT_DAYS);
+}
+
 function readSavedDepth(): Partial<Record<Timeframe, number | null>> {
   try {
     const raw = localStorage.getItem(LS_DEPTH_KEY);
@@ -84,8 +96,14 @@ function depthToBarCount(tf: Timeframe, days: number | null): number {
   return Math.ceil(days * barsPerDay);
 }
 
-export const ChartPicker: React.FC = () => {
+interface ChartPickerProps {
+  triggerLabel?: React.ReactNode;
+  triggerStyle?: React.CSSProperties;
+}
+
+export const ChartPicker: React.FC<ChartPickerProps> = ({ triggerLabel, triggerStyle }) => {
   const { theme } = useChartStore();
+  const isMobile = useIsMobile();
   const [open, setOpen]         = useState(false);
   const [ingestOpen, setIngest] = useState(false);
   const [markets, setMarkets]   = useState<PickerMarket[]>(PRESET_MARKETS);
@@ -190,7 +208,7 @@ export const ChartPicker: React.FC = () => {
   // History depth: per-TF smart default, overridable, persisted in localStorage.
   useEffect(() => {
     const saved = readSavedDepth();
-    const days = saved[tf] !== undefined ? saved[tf]! : DEFAULT_DEPTH_DAYS[tf];
+    const days = saved[tf] !== undefined ? saved[tf]! : defaultDepthDays(tf);
     setDepthDays(days);
   }, [tf]);
 
@@ -265,8 +283,12 @@ export const ChartPicker: React.FC = () => {
 
   return (
     <>
-      <button style={btnStyle} onClick={() => setOpen(true)} title="Open a chart from the local DB or a saved layout">
-        📈 Open chart
+      <button
+        style={{ ...btnStyle, ...triggerStyle }}
+        onClick={() => setOpen(true)}
+        title="Open a chart from the local DB or a saved layout"
+      >
+        {triggerLabel ?? '📈 Open chart'}
       </button>
 
       {open && (
@@ -280,12 +302,18 @@ export const ChartPicker: React.FC = () => {
           <div
             onClick={e => e.stopPropagation()}
             style={{
-              background: bg, color: text, border: `1px solid ${border}`, borderRadius: 8,
-              padding: 16, width: 720, maxHeight: '80vh', overflow: 'auto',
-              boxShadow: '0 12px 40px rgba(0,0,0,0.5)',
+              background: bg, color: text, border: `1px solid ${border}`, borderRadius: isMobile ? 0 : 8,
+              padding: 16, overflow: 'auto', boxShadow: '0 12px 40px rgba(0,0,0,0.5)', boxSizing: 'border-box',
+              ...(isMobile
+                ? {
+                    width: '100%', height: '100%',
+                    paddingTop: 'max(16px, env(safe-area-inset-top))',
+                    paddingBottom: 'max(16px, env(safe-area-inset-bottom))',
+                  }
+                : { width: 720, maxHeight: '80vh' }),
             }}
           >
-            <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', marginBottom: 12 }}>
+            <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', marginBottom: 12, gap: 6, flexWrap: 'wrap' }}>
               <h3 style={{ margin: 0, fontSize: 14 }}>Open chart</h3>
               <div style={{ display: 'flex', gap: 6 }}>
                 <button style={btnStyle} onClick={handleRescan} disabled={busy}
@@ -293,10 +321,11 @@ export const ChartPicker: React.FC = () => {
                   ↻ Rescan disk
                 </button>
                 <button style={btnStyle} onClick={() => { setIngest(true); }}>+ Ingest data</button>
+                {isMobile && <button style={btnStyle} onClick={() => setOpen(false)} aria-label="Close">✕</button>}
               </div>
             </div>
 
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
+            <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '1fr 1fr', gap: 16 }}>
               {/* Saved layouts */}
               <section>
                 <div style={{ fontSize: 11, opacity: 0.7, marginBottom: 6 }}>Saved layouts</div>
@@ -427,14 +456,14 @@ export const ChartPicker: React.FC = () => {
                   // Hard limit matches the openSeries guard: beyond ~1.5M slots
                   // the session-aware grid in generateIntradaySlots balloons
                   // past V8's heap and the tab OOMs.
-                  if (bars > 1_500_000) {
+                  if (bars > BLOCK_BARS[isMobile ? 'mobile' : 'desktop']) {
                     return (
                       <div style={{ fontSize: 10, color: '#f44336', marginBottom: 6 }}>
                         ✗ {barsLabel} bars will likely crash the tab at this timeframe. Pick a shorter window or a coarser TF.
                       </div>
                     );
                   }
-                  if (bars > 500_000) {
+                  if (bars > WARN_BARS[isMobile ? 'mobile' : 'desktop']) {
                     return (
                       <div style={{ fontSize: 10, color: '#ff9800', marginBottom: 6 }}>
                         ⚠ {barsLabel} bars may slow the browser. Consider a shorter window.
