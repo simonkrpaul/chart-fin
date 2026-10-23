@@ -133,8 +133,6 @@ export function renderBackground(rc: RenderContext, slots: CandleSlot[]): void {
 // In-chart hour labels (intraday only) – thin vertical tick + hour at chart top
 // ─────────────────────────────────────────────────────────────────────────────
 
-const HOUR_STEPS = [1, 2, 3, 4, 6, 12, 24];
-
 function slotTimestamp(slots: CandleSlot[], si: number, avgIntervalMs: number): number {
   if (si < slots.length) return slots[si].timestamp;
   return slots[slots.length - 1].timestamp + (si - slots.length + 1) * avgIntervalMs;
@@ -161,13 +159,10 @@ export function renderHourLabels(rc: RenderContext, slots: CandleSlot[], layer: 
   const avgIntervalMs = avgSlotInterval(slots);
   const hourFmt = new Intl.DateTimeFormat('en-US', { hour: '2-digit', hourCycle: 'h23', timeZone: rc.timezone });
 
-  // Shrink the font as candles get narrower; hi-res exports can go much smaller and still be legible when zoomed.
+  // Every hour is always labelled; the font shrinks to fit instead. Hi-res exports go smaller since they're read zoomed in.
   const pxPerHour = tfMin <= 60 ? sw * (60 / tfMin) : sw;
-  const fontSize = Math.max(rc.hiRes ? 5 : 9, Math.min(11, Math.floor(pxPerHour / 1.4)));
+  const fontSize = Math.max(rc.hiRes ? 3 : 7, Math.min(11, Math.floor(pxPerHour / 1.25)));
   ctx.save();
-  ctx.font = `${fontSize}px -apple-system, sans-serif`;
-  const labelW = ctx.measureText('00').width + 3;
-  const step = tfMin <= 60 ? (HOUR_STEPS.find(s => s * pxPerHour >= labelW) ?? 24) : 1;
   const bandH = fontSize + 5;
 
   if (layer === 'labels') {
@@ -180,7 +175,6 @@ export function renderHourLabels(rc: RenderContext, slots: CandleSlot[], layer: 
   ctx.textBaseline = 'top';
 
   let lastHour = '';
-  let lastX = -Infinity;
   for (let i = 0; i < vp.visibleSlotCount; i++) {
     const si = vp.firstSlotIndex + i;
     const ts = slotTimestamp(slots, si, avgIntervalMs);
@@ -188,11 +182,9 @@ export function renderHourLabels(rc: RenderContext, slots: CandleSlot[], layer: 
     const hour = hourFmt.format(ts);
     if (hour === lastHour) continue;
     lastHour = hour;
-    if (Number(hour) % step !== 0) continue;
 
     const x = i * sw + sw / 2;
-    if (x < 0 || x > pw || x - lastX < labelW) continue;
-    lastX = x;
+    if (x < 0 || x > pw) continue;
 
     if (layer === 'ticks') {
       ctx.strokeStyle = theme.gridLine;
