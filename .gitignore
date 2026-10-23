@@ -12,6 +12,9 @@ dist
 dist-ssr
 *.local
 
+# Script runner token (vite/scriptRunner.ts)
+.chartfin/
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json

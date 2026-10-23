@@ -43,9 +43,9 @@ self.addEventListener('activate', event => {
   );
 });
 
-/** Market data and the manifest must always come from the network. */
+/** Market data, the manifest and the dev/preview APIs must always come from the network. */
 function isExcluded(url) {
-  return url.pathname.startsWith('/data/');
+  return url.pathname.startsWith('/data/') || url.pathname.startsWith('/api/');
 }
 
 self.addEventListener('fetch', event => {

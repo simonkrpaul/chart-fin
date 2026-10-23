@@ -17,10 +17,11 @@ import {
 } from '../db/templateManager';
 import type { ChartTemplate } from '../types';
 
-export const TemplateManager: React.FC = () => {
+export const TemplateManager: React.FC<{ inline?: boolean }> = ({ inline = false }) => {
   const { theme, currentSeries } = useChartStore();
 
-  const [open, setOpen]           = useState(false);
+  const [popoverOpen, setOpen]    = useState(false);
+  const open = inline || popoverOpen;
   const [name, setName]           = useState('');
   const [description, setDesc]    = useState('');
   const [templates, setTemplates] = useState<ChartTemplate[]>([]);
@@ -55,9 +56,9 @@ export const TemplateManager: React.FC = () => {
         setOpen(false);
       }
     }
-    if (open) document.addEventListener('pointerdown', onPointerDown);
+    if (popoverOpen) document.addEventListener('pointerdown', onPointerDown);
     return () => document.removeEventListener('pointerdown', onPointerDown);
-  }, [open]);
+  }, [popoverOpen]);
 
   async function handleSave() {
     const trimmed = name.trim();
@@ -132,23 +133,27 @@ export const TemplateManager: React.FC = () => {
 
   return (
     <div ref={panelRef} style={{ position: 'relative' }}>
-      <button
-        onClick={() => setOpen(o => !o)}
-        style={btnStyle}
-        title="Save / apply chart templates (indicators, overlays, cycle combiner, transits)"
-      >
-        📋 Templates
-      </button>
+      {!inline && (
+        <button
+          onClick={() => setOpen(o => !o)}
+          style={btnStyle}
+          title="Save / apply chart templates (indicators, overlays, cycle combiner, transits)"
+        >
+          📋 Templates
+        </button>
+      )}
 
       {open && (
         <div
-          style={{
-            position: 'absolute', top: '100%', right: 0, marginTop: 4,
-            background: bg, color: text, border: `1px solid ${border}`,
-            borderRadius: 6, boxShadow: '0 6px 20px rgba(0,0,0,0.3)',
-            width: 360, maxHeight: 500, overflowY: 'auto', zIndex: 1000,
-            padding: 10, fontSize: 12,
-          }}
+          style={inline
+            ? { color: text, padding: 10, fontSize: 13 }
+            : {
+                position: 'absolute', top: '100%', right: 0, marginTop: 4,
+                background: bg, color: text, border: `1px solid ${border}`,
+                borderRadius: 6, boxShadow: '0 6px 20px rgba(0,0,0,0.3)',
+                width: 360, maxHeight: 500, overflowY: 'auto', zIndex: 1000,
+                padding: 10, fontSize: 12,
+              }}
         >
           {/* ── Save current ──────────────────────────────────────────── */}
           <div style={{ fontWeight: 600, marginBottom: 6 }}>Save current chart as template</div>

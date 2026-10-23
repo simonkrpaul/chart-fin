@@ -1,8 +1,9 @@
 import { spawn, type ChildProcess } from 'node:child_process';
+import { randomBytes, timingSafeEqual } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import type { IncomingMessage, ServerResponse } from 'node:http';
-import type { Plugin } from 'vite';
+import type { Connect, Logger, Plugin } from 'vite';
 
 interface ParamDef {
   name: string;
@@ -81,21 +82,63 @@ interface RunState {
 const LOOPBACK_ADDRS = new Set(['127.0.0.1', '::1', '::ffff:127.0.0.1']);
 const LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]']);
 
-// Loopback-only, and same-origin only so other sites open in the browser can't trigger runs.
-function isTrusted(req: IncomingMessage): boolean {
-  if (!LOOPBACK_ADDRS.has(req.socket.remoteAddress ?? '')) return false;
+// LAN (RFC 1918), Tailscale (100.64/10) and IPv6 ULA / link-local only — never the public internet.
+function isPrivateAddr(addr: string): boolean {
+  const a = addr.replace(/^::ffff:/, '');
+  if (LOOPBACK_ADDRS.has(addr) || a === '127.0.0.1') return true;
+  const m = a.match(/^(\d+)\.(\d+)\.\d+\.\d+$/);
+  if (m) {
+    const [x, y] = [Number(m[1]), Number(m[2])];
+    return x === 10 || (x === 172 && y >= 16 && y <= 31) || (x === 192 && y === 168) || (x === 100 && y >= 64 && y <= 127);
+  }
+  return /^f[cd]/i.test(a) || /^fe[89ab]/i.test(a);
+}
+
+function tokenMatches(given: string | string[] | undefined, token: string): boolean {
+  if (typeof given !== 'string') return false;
+  const a = Buffer.from(given);
+  const b = Buffer.from(token);
+  return a.length === b.length && timingSafeEqual(a, b);
+}
+
+type Access = 'ok' | 'forbidden' | 'need-token';
+
+// Same-origin only so other sites open in the browser can't trigger runs.
+// localhost needs nothing extra; any other device on the LAN/tailnet must send the token.
+function checkAccess(req: IncomingMessage, token: string): Access {
+  const addr = req.socket.remoteAddress ?? '';
+  if (!isPrivateAddr(addr)) return 'forbidden';
   const host = req.headers.host ?? '';
-  if (!LOOPBACK_HOSTS.has(host.replace(/:\d+$/, ''))) return false;
   const origin = req.headers.origin;
   if (origin) {
     try {
-      if (new URL(origin).host !== host) return false;
+      if (new URL(origin).host !== host) return 'forbidden';
     } catch {
-      return false;
+      return 'forbidden';
     }
   }
   const site = req.headers['sec-fetch-site'];
-  return !site || site === 'same-origin' || site === 'none';
+  if (site && site !== 'same-origin' && site !== 'none') return 'forbidden';
+
+  const isLocal = LOOPBACK_ADDRS.has(addr)
+    && LOOPBACK_HOSTS.has(host.replace(/:\d+$/, ''))
+    && !req.headers['x-forwarded-for'];
+  if (isLocal) return 'ok';
+  return tokenMatches(req.headers['x-chartfin-token'], token) ? 'ok' : 'need-token';
+}
+
+function loadToken(repoRoot: string): string {
+  const fromEnv = process.env.CHARTFIN_RUNNER_TOKEN?.trim();
+  if (fromEnv) return fromEnv;
+  const file = path.join(repoRoot, '.chartfin', 'runner-token');
+  try {
+    const saved = fs.readFileSync(file, 'utf8').trim();
+    if (saved.length >= 16) return saved;
+  } catch { /* first run */ }
+  const token = randomBytes(12).toString('base64url');
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, token + '\n', { mode: 0o600 });
+  return token;
 }
 
 function sendJson(res: ServerResponse, code: number, body: unknown): void {
@@ -157,10 +200,21 @@ export function scriptRunner(): Plugin {
 
   return {
     name: 'chartfin-script-runner',
-    apply: 'serve',
     configureServer(server) {
-      const repoRoot = path.resolve(server.config.root);
+      install(server.config.root, server.middlewares, server.httpServer, server.config.logger);
+    },
+    configurePreviewServer(server) {
+      install(server.config.root, server.middlewares, server.httpServer, server.config.logger);
+    },
+  };
+
+  function install(root: string, middlewares: Connect.Server, httpServer: NodeJS.EventEmitter | null, logger: Logger) {
+      const repoRoot = path.resolve(root);
       const python = process.env.CHARTFIN_PYTHON || (process.platform === 'win32' ? 'python' : 'python3');
+      const token = loadToken(repoRoot);
+      httpServer?.once('listening', () => {
+        logger.info(`  ➜  Script runner token (for phone / other devices): ${token}`);
+      });
 
       const start = (def: ScriptDef, st: RunState, args: string[]) => {
         st.lines = [];
@@ -214,12 +268,17 @@ export function scriptRunner(): Plugin {
       const killAll = () => {
         for (const st of states.values()) if (st.proc) killTree(st.proc);
       };
-      server.httpServer?.on('close', killAll);
+      httpServer?.on('close', killAll);
       process.on('exit', killAll);
 
-      server.middlewares.use('/api/scripts', async (req: IncomingMessage, res: ServerResponse) => {
-        if (!isTrusted(req)) {
-          sendJson(res, 403, { error: 'Script runner is only available from localhost' });
+      middlewares.use('/api/scripts', async (req: IncomingMessage, res: ServerResponse) => {
+        const access = checkAccess(req, token);
+        if (access === 'forbidden') {
+          sendJson(res, 403, { error: 'Script runner is only available on your local network' });
+          return;
+        }
+        if (access === 'need-token') {
+          sendJson(res, 401, { error: 'Enter the script runner token shown in the desktop terminal', needToken: true });
           return;
         }
         const url = new URL(req.url ?? '/', 'http://localhost');
@@ -291,6 +350,5 @@ export function scriptRunner(): Plugin {
 
         sendJson(res, 404, { error: 'Unknown action' });
       });
-    },
-  };
+  }
 }

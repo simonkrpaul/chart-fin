@@ -12,10 +12,11 @@ import { saveLayout, listLayouts, deleteLayout } from '../db/persistence';
 import { saveLayoutDb, deleteLayoutDb } from '../db/marketStore';
 import type { ChartLayout } from '../types';
 
-export const LayoutManager: React.FC = () => {
+export const LayoutManager: React.FC<{ inline?: boolean }> = ({ inline = false }) => {
   const { exportLayout, theme } = useChartStore();
 
-  const [open, setOpen]       = useState(false);
+  const [popoverOpen, setOpen] = useState(false);
+  const open = inline || popoverOpen;
   const [name, setName]       = useState('');
   const [layouts, setLayouts] = useState<ChartLayout[]>([]);
   const [status, setStatus]   = useState('');
@@ -41,9 +42,9 @@ export const LayoutManager: React.FC = () => {
         setOpen(false);
       }
     }
-    if (open) document.addEventListener('pointerdown', onPointerDown);
+    if (popoverOpen) document.addEventListener('pointerdown', onPointerDown);
     return () => document.removeEventListener('pointerdown', onPointerDown);
-  }, [open]);
+  }, [popoverOpen]);
 
   function handleSave() {
     const trimmed = name.trim();
@@ -94,15 +95,17 @@ export const LayoutManager: React.FC = () => {
   };
 
   return (
-    <div ref={panelRef} style={{ position: 'relative', display: 'inline-block' }}>
+    <div ref={panelRef} style={{ position: 'relative', display: inline ? 'block' : 'inline-block' }}>
       {/* Trigger button */}
-      <button
-        style={{ ...btnBase, background: open ? accent : 'transparent', color: open ? '#fff' : text }}
-        onClick={() => setOpen(v => !v)}
-        title="Save or load named chart layouts"
-      >
-        ⊞ Layouts
-      </button>
+      {!inline && (
+        <button
+          style={{ ...btnBase, background: open ? accent : 'transparent', color: open ? '#fff' : text }}
+          onClick={() => setOpen(v => !v)}
+          title="Save or load named chart layouts"
+        >
+          ⊞ Layouts
+        </button>
+      )}
 
       {/* Status badge (shows briefly outside the panel) */}
       {!open && status && (
@@ -114,26 +117,28 @@ export const LayoutManager: React.FC = () => {
       {/* Dropdown panel */}
       {open && (
         <div
-          style={{
-            position: 'absolute',
-            top: 'calc(100% + 6px)',
-            left: 0,
-            zIndex: 100,
-            background: bg,
-            border: `1px solid ${border}`,
-            borderRadius: 6,
-            padding: 12,
-            width: 280,
-            boxShadow: '0 4px 16px rgba(0,0,0,0.3)',
-            display: 'flex',
-            flexDirection: 'column',
-            gap: 10,
-          }}
+          style={inline
+            ? { padding: 10, display: 'flex', flexDirection: 'column', gap: 10 }
+            : {
+                position: 'absolute',
+                top: 'calc(100% + 6px)',
+                left: 0,
+                zIndex: 100,
+                background: bg,
+                border: `1px solid ${border}`,
+                borderRadius: 6,
+                padding: 12,
+                width: 280,
+                boxShadow: '0 4px 16px rgba(0,0,0,0.3)',
+                display: 'flex',
+                flexDirection: 'column',
+                gap: 10,
+              }}
         >
           {/* Save row */}
           <div style={{ display: 'flex', gap: 6 }}>
             <input
-              autoFocus
+              autoFocus={!inline}
               value={name}
               onChange={e => setName(e.target.value)}
               onKeyDown={e => { if (e.key === 'Enter') handleSave(); }}

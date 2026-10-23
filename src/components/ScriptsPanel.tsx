@@ -20,8 +20,15 @@ interface ScriptInfo {
 }
 
 const API = '/api/scripts';
-const HEADERS = { 'Content-Type': 'application/json', 'X-ChartFin-Runner': '1' };
 const LS_PARAMS = 'chartfin.scripts.params';
+const LS_TOKEN = 'chartfin.scripts.token';
+
+function authHeaders(extra: Record<string, string> = {}): Record<string, string> {
+  const token = localStorage.getItem(LS_TOKEN);
+  return token ? { ...extra, 'X-ChartFin-Token': token } : extra;
+}
+
+const postHeaders = () => authHeaders({ 'Content-Type': 'application/json', 'X-ChartFin-Runner': '1' });
 
 function loadSavedParams(): Record<string, Record<string, string>> {
   try {
@@ -44,13 +51,21 @@ export const ScriptsPanel: React.FC = () => {
   const [selected, setSelected] = useState<string | null>(null);
   const [lines, setLines] = useState<string[]>([]);
   const [params, setParams] = useState(loadSavedParams);
+  const [needToken, setNeedToken] = useState(false);
+  const [tokenInput, setTokenInput] = useState('');
   const logRef = useRef<HTMLPreElement>(null);
   const prevRunning = useRef<Record<string, boolean>>({});
 
   const loadList = useCallback(async () => {
     try {
-      const res = await fetch(API);
+      const res = await fetch(API, { headers: authHeaders() });
+      if (res.status === 401) {
+        setNeedToken(true);
+        setScripts([]);
+        return;
+      }
       if (!res.ok) throw new Error((await res.json()).error ?? `HTTP ${res.status}`);
+      setNeedToken(false);
       const list: ScriptInfo[] = await res.json();
       for (const s of list) {
         if (prevRunning.current[s.id] && !s.running && s.exitCode === 0 && !s.longRunning) refreshManifest();
@@ -69,18 +84,48 @@ export const ScriptsPanel: React.FC = () => {
     return () => clearInterval(t);
   }, [loadList]);
 
+  // fetch-based SSE (not EventSource) so the auth header is sent from phones.
   useEffect(() => {
-    if (!selected) return;
+    if (!selected || needToken) return;
     setLines([]);
-    const es = new EventSource(`${API}/${selected}/stream`);
-    es.addEventListener('snapshot', e => setLines(JSON.parse((e as MessageEvent).data).lines));
-    es.addEventListener('log', e => {
-      const line: string = JSON.parse((e as MessageEvent).data);
-      setLines(prev => (prev.length >= 2000 ? [...prev.slice(-1999), line] : [...prev, line]));
-    });
-    es.addEventListener('status', () => loadList());
-    return () => es.close();
-  }, [selected, loadList]);
+    const ctrl = new AbortController();
+    (async () => {
+      try {
+        const res = await fetch(`${API}/${selected}/stream`, { headers: authHeaders(), signal: ctrl.signal });
+        if (!res.ok || !res.body) return;
+        const reader = res.body.pipeThrough(new TextDecoderStream()).getReader();
+        let buf = '';
+        for (;;) {
+          const { value, done } = await reader.read();
+          if (done) break;
+          buf += value;
+          const blocks = buf.split('\n\n');
+          buf = blocks.pop() ?? '';
+          for (const block of blocks) {
+            const event = block.match(/^event: (.*)$/m)?.[1];
+            const data = block.match(/^data: (.*)$/m)?.[1];
+            if (!event || data === undefined) continue;
+            if (event === 'snapshot') setLines(JSON.parse(data).lines);
+            else if (event === 'log') {
+              const line: string = JSON.parse(data);
+              setLines(prev => (prev.length >= 2000 ? [...prev.slice(-1999), line] : [...prev, line]));
+            } else if (event === 'status') loadList();
+          }
+        }
+      } catch {
+        /* aborted or connection dropped */
+      }
+    })();
+    return () => ctrl.abort();
+  }, [selected, needToken, loadList]);
+
+  const saveToken = () => {
+    const t = tokenInput.trim();
+    if (!t) return;
+    localStorage.setItem(LS_TOKEN, t);
+    setTokenInput('');
+    loadList();
+  };
 
   useEffect(() => {
     const el = logRef.current;
@@ -100,13 +145,13 @@ export const ScriptsPanel: React.FC = () => {
   const run = async (s: ScriptInfo) => {
     setSelected(s.id);
     const body = Object.fromEntries(s.params.map(p => [p.name, paramValue(s, p.name, p.default)]));
-    const res = await fetch(`${API}/${s.id}/run`, { method: 'POST', headers: HEADERS, body: JSON.stringify(body) });
+    const res = await fetch(`${API}/${s.id}/run`, { method: 'POST', headers: postHeaders(), body: JSON.stringify(body) });
     if (!res.ok) setError((await res.json()).error ?? `HTTP ${res.status}`);
     loadList();
   };
 
   const stop = async (s: ScriptInfo) => {
-    await fetch(`${API}/${s.id}/stop`, { method: 'POST', headers: HEADERS });
+    await fetch(`${API}/${s.id}/stop`, { method: 'POST', headers: postHeaders() });
     loadList();
   };
 
@@ -126,6 +171,26 @@ export const ScriptsPanel: React.FC = () => {
   return (
     <div style={{ background: bg, color: text, padding: 10, fontSize: 12, display: 'flex', flexDirection: 'column', gap: 8, height: '100%', boxSizing: 'border-box' }}>
       {error && <div style={{ color: '#ef5350', fontSize: 11 }}>{error}</div>}
+
+      {needToken && (
+        <div style={{ border: `1px solid ${border}`, borderRadius: 4, padding: 8, display: 'flex', flexDirection: 'column', gap: 6 }}>
+          <div style={{ fontSize: 11, color: muted }}>
+            Enter the <b>Script runner token</b> printed in the desktop terminal where <code>pnpm dev</code> is running
+            (also saved in <code>.chartfin/runner-token</code>).
+          </div>
+          <input
+            value={tokenInput}
+            onChange={e => setTokenInput(e.target.value)}
+            onKeyDown={e => { if (e.key === 'Enter') saveToken(); }}
+            placeholder="Token"
+            autoCapitalize="off"
+            autoCorrect="off"
+            spellCheck={false}
+            style={{ fontSize: 14, padding: '6px 8px', background: isDark ? '#131722' : '#fff', color: text, border: `1px solid ${border}`, borderRadius: 4 }}
+          />
+          <button style={btn} onClick={saveToken}>Save token</button>
+        </div>
+      )}
 
       {scripts.map(s => (
         <div

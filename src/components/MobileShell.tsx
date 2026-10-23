@@ -15,16 +15,17 @@ import { MeasurementOverlay } from './MeasurementOverlay';
 import { BacktestReport } from './BacktestReport';
 import { ChartPicker } from './ChartPicker';
 import { TimezoneNativeSelect } from './TimezoneSelector';
+import { TemplateManager } from './TemplateManager';
+import { LayoutManager } from './LayoutManager';
 import { TIMEFRAMES, TOOLS } from './toolbarConfig';
 import { TABS, type TabKey } from './sidebarTabs';
 
-type Sheet = null | 'draw' | 'more' | TabKey;
+type Sheet = null | 'draw' | 'more' | 'templates' | 'layouts' | TabKey;
 
 const ACCENT = '#2962ff';
 const TOUCH = 44;
 const NAV_HEIGHT = 56;
-// Panels that need the desktop machine (loopback-only API) are hidden on phones.
-const MOBILE_PANELS = TABS.filter(t => t.key !== 'scripts');
+const MOBILE_PANELS = TABS;
 
 export const MobileShell: React.FC = () => {
   const {
@@ -77,7 +78,12 @@ export const MobileShell: React.FC = () => {
 
   const seriesLabel = currentSeries ? currentSeries.symbol : 'Open chart';
   const panel = MOBILE_PANELS.find(t => t.key === sheet);
-  const sheetTitle = sheet === 'draw' ? 'Drawing tools' : sheet === 'more' ? 'More' : panel?.label ?? '';
+  const tools: { key: 'templates' | 'layouts'; icon: string; label: string }[] = [
+    { key: 'templates', icon: '📋', label: 'Templates' },
+    { key: 'layouts', icon: '⊞', label: 'Layouts' },
+  ];
+  const tool = tools.find(t => t.key === sheet);
+  const sheetTitle = sheet === 'draw' ? 'Drawing tools' : sheet === 'more' ? 'More' : panel?.label ?? tool?.label ?? '';
 
   const navItems: { key: Sheet; icon: string; label: string }[] = [
     { key: null, icon: '📈', label: 'Chart' },
@@ -203,7 +209,7 @@ export const MobileShell: React.FC = () => {
               <div style={{ width: 36, height: 4, borderRadius: 2, background: border }} />
             </div>
             <div style={{ display: 'flex', alignItems: 'center', gap: 4, padding: '0 6px', borderBottom: `1px solid ${border}` }}>
-              {panel && panel.key !== 'indicators' && (
+              {((panel && panel.key !== 'indicators') || tool) && (
                 <button style={iconBtn()} onClick={() => setSheet('more')} aria-label="Back">‹</button>
               )}
               <span style={{ flex: 1, fontWeight: 600, fontSize: 15, paddingLeft: 6 }}>{sheetTitle}</span>
@@ -242,7 +248,7 @@ export const MobileShell: React.FC = () => {
               {sheet === 'more' && (
                 <>
                   <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 8, marginBottom: 12 }}>
-                    {MOBILE_PANELS.filter(t => t.key !== 'indicators').map(t => (
+                    {[...MOBILE_PANELS.filter(t => t.key !== 'indicators'), ...tools].map(t => (
                       <button
                         key={t.key}
                         onClick={() => setSheet(t.key)}
@@ -280,6 +286,8 @@ export const MobileShell: React.FC = () => {
               )}
 
               {panel && panel.render()}
+              {sheet === 'templates' && <TemplateManager inline />}
+              {sheet === 'layouts' && <LayoutManager inline />}
             </div>
           </div>
         </div>
