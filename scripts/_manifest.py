@@ -66,7 +66,7 @@ def update_meta_source(
     meta: dict = {}
     if meta_path.exists():
         try:
-            meta = json.loads(meta_path.read_text()) or {}
+            meta = json.loads(meta_path.read_text(encoding="utf-8")) or {}
         except json.JSONDecodeError:
             meta = {}
 
@@ -88,7 +88,7 @@ def update_meta_source(
         meta.setdefault("description", description)
 
     market_dir.mkdir(parents=True, exist_ok=True)
-    meta_path.write_text(json.dumps(meta, indent=2))
+    meta_path.write_text(json.dumps(meta, indent=2), encoding="utf-8")
 
 
 def rebuild_manifest(
@@ -138,7 +138,7 @@ def rebuild_manifest(
             meta_file = csv_path.parent / f"{symbol}.meta.json"
             if meta_file.exists():
                 try:
-                    meta = json.loads(meta_file.read_text())
+                    meta = json.loads(meta_file.read_text(encoding="utf-8"))
                     # Per-TF override wins; symbol-level exchange/description
                     # is the fallback. Lets one symbol expose multiple sources
                     # (e.g. Kaggle 1m + evtradelabs 5m under one XAUUSD).
@@ -160,7 +160,7 @@ def rebuild_manifest(
         "templates": _scan_templates(markets_dir.parent / "templates", repo_root),
     }
     markets_dir.mkdir(parents=True, exist_ok=True)
-    manifest_path.write_text(json.dumps(manifest, indent=2))
+    manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
     if not quiet:
         print(f"[manifest] rebuilt · {len(sources)} series · {len(manifest['templates'])} templates · {manifest_path.relative_to(repo_root)}")
         if legacy_1M_files:
@@ -189,7 +189,7 @@ def _scan_templates(
     out: list[dict] = []
     for p in sorted(templates_dir.glob("*.json")):
         try:
-            tpl = json.loads(p.read_text())
+            tpl = json.loads(p.read_text(encoding="utf-8"))
         except json.JSONDecodeError:
             print(f"[manifest] warning: skipping unparseable template {p.name}")
             continue

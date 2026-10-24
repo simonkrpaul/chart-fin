@@ -1,6 +1,7 @@
 import { spawn, type ChildProcess } from 'node:child_process';
 import { randomBytes, timingSafeEqual } from 'node:crypto';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import type { Connect, Logger, Plugin } from 'vite';
@@ -63,6 +64,27 @@ const SCRIPTS: ScriptDef[] = [
       if (path.extname(abs).toLowerCase() !== '.csv') throw new Error('Input must be a .csv file');
       if (!fs.existsSync(abs)) throw new Error(`File not found: ${rel}`);
       return ['--mode', 'append', '--input', abs];
+    },
+  },
+  {
+    id: 'djia',
+    label: 'DJIA daily (CSV / TXT export)',
+    description: 'python scripts/import_daily_csv.py <file> --market us_equity --symbol DJIA — merges new and corrected days.',
+    file: 'import_daily_csv.py',
+    params: [{ name: 'input', label: 'Input .csv or .txt (in the repo or ~/Downloads)', default: '~/Downloads/Dow_1885_new.txt' }],
+    buildArgs: (params, repoRoot) => {
+      const raw = (params.input ?? '').trim();
+      const downloads = path.join(os.homedir(), 'Downloads');
+      const abs = /^~[/\\]/.test(raw) ? path.join(os.homedir(), raw.slice(2)) : path.resolve(repoRoot, raw);
+      const inside = (dir: string) => abs.startsWith(dir + path.sep);
+      if (!raw || !(inside(repoRoot) || inside(downloads))) throw new Error('Input must be inside the repo or ~/Downloads');
+      if (!['.csv', '.txt'].includes(path.extname(abs).toLowerCase())) throw new Error('Input must be a .csv or .txt file');
+      if (!fs.existsSync(abs)) throw new Error(`File not found: ${raw}`);
+      return [
+        abs, '--market', 'us_equity', '--symbol', 'DJIA',
+        '--exchange', 'Dow Jones Industrial Average (index)',
+        '--description', 'Dow Jones Industrial Average, daily since 1885',
+      ];
     },
   },
 ];

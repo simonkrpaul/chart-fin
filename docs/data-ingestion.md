@@ -57,6 +57,7 @@ manifest without closing/reopening.
 | [import_xauusd_iso.py](../scripts/import_xauusd_iso.py) | ISO-timestamp 1m CSV (any provider) | `forex` | Gold 1m + all resampled TFs; supports **merge** with existing 1m history |
 | [import_evtradelabs_xauusd.py](../scripts/import_evtradelabs_xauusd.py) | [evtradelabs.com](https://evtradelabs.com/) XAUUSD JSON archive | `forex` | Gold 5m bid/ask/mid (23 years, per-year JSON files) |
 | [import_market.py](../scripts/import_market.py) | Any CSV file | any | Generic promoter — moves an existing CSV into the market layout |
+| [import_daily_csv.py](../scripts/import_daily_csv.py) | Daily/weekly/monthly OHLC export (`.csv` or `.txt`) | any | Merges new + corrected days into an existing series (e.g. DJIA since 1885); reports bad rows and gaps |
 | [mock_alpaca.py](../scripts/mock_alpaca.py) | Synthetic (Alpaca schema) | `us_equity` | 1-min OHLCV, NYSE session hours, no network needed |
 | [mock_data.py](../scripts/mock_data.py) | Synthetic | 4 profiles | Crypto / US equity / ASX / forex — deterministic random-walk |
 | [mt5_sync.py](../scripts/mt5_sync.py) | MetaTrader 5 terminal (Pepperstone etc.) | `forex` | **Windows-only**. Live broker bars — one-shot or loop every N seconds |
@@ -1165,3 +1166,111 @@ The **only** OS-locked piece is `mt5_sync.py` (blocked by the MT5 Python package
 - **Don't commit credentials.** If you use headless mode, put the env vars in `.env` and add `.env` to `.gitignore`.
 - **Don't share the MT5 investor password with headless mode by accident** — the investor password grants read-only account access, but the main password grants trading. Use the read-only one if MT5's `INVESTOR_PASSWORD_MODE` flag suits your broker.
 - **Don't run the loop while manually importing** (`import_evtradelabs_xauusd.py --symbol XAUUSD_MT5 …`) — the two would fight over the same files. Different symbols keep them out of each other's way.
+
+---
+
+## 10. Daily exports — DJIA and other indices
+
+[`scripts/import_daily_csv.py`](../scripts/import_daily_csv.py) imports a daily (or weekly / monthly) OHLC export and **merges** it into an existing series. Use it to add new days, amend corrected days, and fill gaps — for example the Dow Jones Industrial Average back to 1885.
+
+### Input file
+
+- `.csv` or `.txt`, comma-separated, first row is a header.
+- Columns `Date, Open, High, Low, Close` and optionally `Volume` (any order, any case). An unnamed column after `Close` is read as volume.
+- Dates `MM/DD/YYYY` (default), `YYYY-MM-DD`, or `DD/MM/YYYY` with `--date-format dmy`.
+- **Don't open and re-save the export in Excel / Numbers.** That is what corrupted the original `Dow_1885.csv` (rows merged, decimals lost). Import the raw `.txt` as-is.
+
+### Before the first run (once per computer)
+
+The script only needs Python 3.8+ — no extra packages.
+
+| | macOS | Windows |
+| --- | --- | --- |
+| Check Python | `python3 --version` | `python --version` (or `py --version`) |
+| Install if missing | [python.org](https://www.python.org/downloads/) or `brew install python` | [python.org](https://www.python.org/downloads/) — tick **Add python.exe to PATH** in the installer |
+| Open a terminal in the project | Terminal → `cd ~/Dev/simonkrpaul/chart-fin` | PowerShell → `cd C:\Users\simon\Documents\repos\Oct-Chart-fin\chart-fin` |
+
+On Windows, if `python` opens the Microsoft Store, use `py` instead in every command below.
+
+### Step by step — update or amend DJIA
+
+1. Download the latest full-history export and save it as `Dow_1885_new.txt` in your **Downloads** folder (overwrite the old one).
+2. Check it first — nothing is written:
+
+   macOS:
+   ```bash
+   python3 scripts/import_daily_csv.py ~/Downloads/Dow_1885_new.txt --market us_equity --symbol DJIA --dry-run
+   ```
+   Windows (PowerShell):
+   ```powershell
+   python scripts\import_daily_csv.py "$HOME\Downloads\Dow_1885_new.txt" --market us_equity --symbol DJIA --dry-run
+   ```
+   Windows (Command Prompt):
+   ```cmd
+   python scripts\import_daily_csv.py "%USERPROFILE%\Downloads\Dow_1885_new.txt" --market us_equity --symbol DJIA --dry-run
+   ```
+   Read the report: `new dates`, `amended`, any `[skip]` lines (bad rows, with line numbers) and `[gap]` lines. The 1914 and 1933 gaps are real market closures.
+3. Import it — the same command without `--dry-run`:
+
+   macOS:
+   ```bash
+   python3 scripts/import_daily_csv.py ~/Downloads/Dow_1885_new.txt --market us_equity --symbol DJIA
+   ```
+   Windows (PowerShell):
+   ```powershell
+   python scripts\import_daily_csv.py "$HOME\Downloads\Dow_1885_new.txt" --market us_equity --symbol DJIA
+   ```
+   Windows (Command Prompt):
+   ```cmd
+   python scripts\import_daily_csv.py "%USERPROFILE%\Downloads\Dow_1885_new.txt" --market us_equity --symbol DJIA
+   ```
+4. In the app: **Open chart → ↻ Rescan disk**, then reopen **US Equities → DJIA → 1d → All history**. Rescan clears the cached candles, so amended values replace the old ones.
+
+Or run steps 3–4 from the app on either OS: **Data Scripts → DJIA daily (CSV / TXT export) → Run** (desktop or phone), then Rescan disk. The input box takes `~/Downloads/Dow_1885_new.txt` on both macOS and Windows (`~` means your user folder); only files inside the project or your Downloads folder are accepted. The app runs `python` on Windows and `python3` on macOS — set `CHARTFIN_PYTHON` before `pnpm dev` to use a different one.
+
+### How merging works
+
+| Situation | Result |
+| --- | --- |
+| Date not stored yet | Added |
+| Date stored, values differ in the input | **Amended** — the input wins |
+| Date stored, missing from the input | Kept (a short "last few weeks" export is fine) |
+| Same date in several input files | The **last** file on the command line wins |
+| `--mode replace` | Stored file is replaced by exactly what the inputs contain |
+
+Patch a gap or a few wrong days with a second file listed after the main one:
+
+```bash
+# macOS
+python3 scripts/import_daily_csv.py ~/Downloads/Dow_1885_new.txt ~/Downloads/dow_fixes.txt --market us_equity --symbol DJIA
+```
+```powershell
+# Windows (PowerShell)
+python scripts\import_daily_csv.py "$HOME\Downloads\Dow_1885_new.txt" "$HOME\Downloads\dow_fixes.txt" --market us_equity --symbol DJIA
+```
+
+### Other symbols
+
+Same script, different names — e.g. an S&P 500 index export:
+
+```bash
+# macOS
+python3 scripts/import_daily_csv.py ~/Downloads/spx.txt --market us_equity --symbol SPX --exchange "S&P 500 (index)" --description "S&P 500 index, daily"
+```
+```powershell
+# Windows (PowerShell)
+python scripts\import_daily_csv.py "$HOME\Downloads\spx.txt" --market us_equity --symbol SPX --exchange "S&P 500 (index)" --description "S&P 500 index, daily"
+```
+
+Output: `public/data/markets/<market>/<SYMBOL>_1d.csv` (ISO dates), `<SYMBOL>.meta.json`, and a rebuilt `manifest.json`. These files are local data and are git-ignored — run the import on each computer (Mac and Windows) that should show the series.
+
+### Troubleshooting
+
+| Problem | Fix |
+| --- | --- |
+| `python3: command not found` (macOS) | Install Python 3 (see above) |
+| `python` opens the Microsoft Store (Windows) | Use `py` instead of `python`, or reinstall from python.org with **Add to PATH** ticked |
+| `Input not found` | Check the file name and that it's in Downloads; on Windows keep the path in quotes |
+| `Missing column(s)` | The first line must be a header with Date, Open, High, Low, Close |
+| Many `[skip] ... unrecognised date` lines | Dates are day-first — add `--date-format dmy` |
+| Chart still shows old values | Click **↻ Rescan disk** in Open chart, then reopen the series |

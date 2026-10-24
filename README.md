@@ -540,6 +540,7 @@ Scripts in `scripts/`:
 | `mock_alpaca.py` | Synthetic 1-minute equity bars in exact Alpaca schema; NYSE session hours; auto-updates the manifest |
 | `import_kaggle_sp500.py` | Kaggle S&P 500 daily → per-symbol CSVs; skip / append / overwrite modes; auto raises OS fd limit on macOS |
 | `import_market.py` | Generic per-market normalized import |
+| `import_daily_csv.py` | Daily OHLC export (e.g. DJIA since 1885) → merge new / corrected days; macOS + Windows steps in [docs/data-ingestion.md](docs/data-ingestion.md#10-daily-exports--djia-and-other-indices) |
 | `mock_data.py` | Deterministic OHLCV walk for offline demo (4 market profiles) |
 | `fill_gaps.py` | Bybit-only gap-filler for historical holes |
 | `download_kaggle_btc.py` | Kaggle Bitcoin dataset downloader |

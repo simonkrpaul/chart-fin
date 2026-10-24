@@ -390,10 +390,11 @@ async function _streamCsvCandles(
     if (cells.length < 5) return;
     const rawTs = cells[tsCol];
     let ts: number;
-    if (/^\d+$/.test(rawTs)) {
+    if (/^-?\d+$/.test(rawTs)) {
       ts = Number(rawTs);
       // ms timestamps before 2001-09-09 are < 1e12, so the cutoff must be 1e11 (≈ 1973 in ms).
-      if (ts < 1e11) ts *= 1000;
+      // Negative values are pre-1970 ms (e.g. DJIA from 1885), never seconds.
+      if (ts >= 0 && ts < 1e11) ts *= 1000;
     } else {
       const parsed = Date.parse(rawTs);
       if (isNaN(parsed)) return;
