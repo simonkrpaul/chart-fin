@@ -28,6 +28,16 @@ function toDateInput(d: Date): string {
   return d.toISOString().slice(0, 10);
 }
 
+// Months / years use average Gregorian lengths, so they're approximate.
+function describeOffset(days: number): string {
+  const weeks = Math.floor(days / 7);
+  const rem = days % 7;
+  const w = rem ? `${weeks}w ${rem}d` : `${weeks} weeks`;
+  const months = days / 30.4375;
+  const years = days / 365.25;
+  return `= ${w} · ≈ ${months.toFixed(1)} months · ≈ ${years.toFixed(2)} years`;
+}
+
 export const OverlayPanel: React.FC = () => {
   const {
     overlayConfigs,
@@ -245,6 +255,9 @@ export const OverlayPanel: React.FC = () => {
           placeholder="Custom days"
           style={{ ...inputStyle, marginTop: 4 }}
         />
+        {offsetDays > 0 && (
+          <div style={{ fontSize: 10, opacity: 0.6, marginTop: 3 }}>{describeOffset(offsetDays)}</div>
+        )}
       </div>
 
       {/* Mode */}
@@ -546,6 +559,11 @@ export const OverlayPanel: React.FC = () => {
                 }}>
                   {(correlations[cfg.id]!.r * 100).toFixed(1)}% corr
                   <span style={{ opacity: 0.5, fontWeight: 400 }}> ({correlations[cfg.id]!.n}pts)</span>
+                </span>
+              )}
+              {cfg.calendarDayOffset > 0 && (
+                <span style={{ display: 'block', fontSize: 10, fontWeight: 400, opacity: 0.6, marginTop: 2 }}>
+                  {describeOffset(cfg.calendarDayOffset)}
                 </span>
               )}
             </span>
