@@ -20,6 +20,7 @@ export const CycleCombinerPanel: React.FC = () => {
     removeCycleInput,
     updateCycleInput,
     recomputeCycleCombiner,
+    overlays,
     theme,
   } = useChartStore();
 
@@ -27,7 +28,10 @@ export const CycleCombinerPanel: React.FC = () => {
   const isDark = theme === 'dark';
 
   const handleAddCycle = (days: number) => {
-    addCycleInput({ offsetDays: days, weight: 1.0, enabled: true });
+    const mirror = Object.values(overlays).some(
+      o => o.config.calendarDayOffset === days && o.config.mirror && o.config.mirrorOnly,
+    );
+    addCycleInput({ offsetDays: days, weight: 1.0, enabled: true, mirror });
   };
 
   const handleAddCustom = () => {
@@ -127,6 +131,7 @@ export const CycleCombinerPanel: React.FC = () => {
                 <th style={{ textAlign: 'left', padding: '2px 4px' }}>On</th>
                 <th style={{ textAlign: 'left', padding: '2px 4px' }}>Days</th>
                 <th style={{ textAlign: 'left', padding: '2px 4px' }}>Weight</th>
+                <th style={{ textAlign: 'left', padding: '2px 4px' }} title="Use only the mirrored (inverted) cycle">Mirror</th>
                 <th style={{ padding: '2px 4px' }}></th>
               </tr>
             </thead>
@@ -151,6 +156,14 @@ export const CycleCombinerPanel: React.FC = () => {
                       value={cycle.weight}
                       onChange={e => updateCycleInput(idx, { weight: parseFloat(e.target.value) || 0 })}
                       style={{ width: 50, background: isDark ? '#333' : '#fff', color: isDark ? '#fff' : '#000', border: '1px solid #555', borderRadius: 3, padding: '1px 3px' }}
+                    />
+                  </td>
+                  <td style={{ padding: '3px 4px' }}>
+                    <input
+                      type="checkbox"
+                      checked={cycle.mirror ?? false}
+                      onChange={() => updateCycleInput(idx, { mirror: !cycle.mirror })}
+                      title="Use only the mirrored (inverted) cycle"
                     />
                   </td>
                   <td style={{ padding: '3px 4px', textAlign: 'center' }}>

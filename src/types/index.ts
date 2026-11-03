@@ -236,6 +236,8 @@ export interface OffsetOverlayConfig {
   showSwingPct?: boolean;
   /** When true, also render a vertically-mirrored clone anchored near current price */
   mirror?: boolean;
+  /** When true (with mirror), hide the original and render only the mirrored clone */
+  mirrorOnly?: boolean;
 }
 
 /**
@@ -911,6 +913,8 @@ export interface CycleInput {
   weight: number;
   /** Whether this cycle is enabled */
   enabled: boolean;
+  /** Use the mirrored (inverted) cycle: each percent change is sign-flipped */
+  mirror?: boolean;
 }
 
 /** Configuration for the cycle combiner */

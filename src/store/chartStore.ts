@@ -1615,7 +1615,8 @@ export function createChartStore(panelId: string = 'p1'): StoreApi<ChartState & 
           const prevClose = rawCandles[prevIdx].close;
           const currClose = rawCandles[bestIdx].close;
           if (prevClose === 0) continue;
-          const pctChange = ((currClose - prevClose) / prevClose) * 100;
+          const rawPct = ((currClose - prevClose) / prevClose) * 100;
+          const pctChange = cycle.mirror ? -rawPct : rawPct;
 
           weightedSum += pctChange * cycle.weight;
           totalWeight += Math.abs(cycle.weight);

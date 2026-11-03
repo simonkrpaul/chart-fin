@@ -1505,11 +1505,12 @@ export function renderOffsetConfluenceHighlight(
   // Doji bars (open === close) are skipped so they don't blur consensus.
   const signsBySlot = new Map<number, number[]>();
   for (const ov of visible) {
+    const flip = ov.config.mirror && ov.config.mirrorOnly && ov.config.mode === 'overlay' ? -1 : 1;
     for (const pc of ov.projectedCandles) {
       const si = Math.round(pc.projectedSlotIndex);
       if (si < firstSi || si >= lastSi) continue;
-      const d = pc.candle.close > pc.candle.open ? 1
-              : pc.candle.close < pc.candle.open ? -1 : 0;
+      const d = flip * (pc.candle.close > pc.candle.open ? 1
+              : pc.candle.close < pc.candle.open ? -1 : 0);
       if (d === 0) continue;
       let arr = signsBySlot.get(si);
       if (!arr) { arr = []; signsBySlot.set(si, arr); }
@@ -1584,16 +1585,20 @@ export function renderOverlays(
       }
     }
 
-    // Render normal overlay
-    _renderOverlayCandles(ctx, ov, vp, ps, ph, sw, bodyW, color, alpha, mapPrice);
+    const canMirror = ov.config.mirror && ov.config.mode === 'overlay' && isFinite(ovMin) && isFinite(ovMax) && ovMax > ovMin;
+    const mirrorOnly = canMirror && (ov.config.mirrorOnly ?? false);
 
-    // ── Swing HL for this overlay ─────────────────────────────────────────
-    if (ov.overlaySwingPoints?.length) {
-      _renderOverlaySwingHL(rc, ov.overlaySwingPoints, color, alpha, ov.config.showSwingPct ?? false, mapPrice);
+    if (!mirrorOnly) {
+      _renderOverlayCandles(ctx, ov, vp, ps, ph, sw, bodyW, color, alpha, mapPrice);
+
+      // ── Swing HL for this overlay ─────────────────────────────────────────
+      if (ov.overlaySwingPoints?.length) {
+        _renderOverlaySwingHL(rc, ov.overlaySwingPoints, color, alpha, ov.config.showSwingPct ?? false, mapPrice);
+      }
     }
 
     // ── Mirror clone ──────────────────────────────────────────────────────
-    if (ov.config.mirror && ov.config.mode === 'overlay' && isFinite(ovMin) && isFinite(ovMax) && ovMax > ovMin) {
+    if (canMirror) {
       // Mirror inverts the overlay vertically, anchored near the current price.
       // currentPrice = midpoint of visible primary range (so mirrored data sits near current action)
       const currentMid = (ps.min + ps.max) / 2;
@@ -1613,8 +1618,8 @@ export function renderOverlays(
         return targetMin + ((mirrored - ovMin) / ovRange) * (targetMax - targetMin);
       };
 
-      // Render mirrored with dashed style and reduced opacity
-      const mirrorAlpha = alpha * 0.6;
+      // Render mirrored with dashed style; reduced opacity only when shown alongside the original
+      const mirrorAlpha = mirrorOnly ? alpha : alpha * 0.6;
       const mirrorColor = color;
       _renderOverlayCandles(ctx, ov, vp, ps, ph, sw, bodyW, mirrorColor, mirrorAlpha, mapPriceMirror, true);
 

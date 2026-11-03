@@ -588,6 +588,12 @@ export const OverlayPanel: React.FC = () => {
             <input type="checkbox" checked={cfg.mirror ?? false} onChange={e => updateOverlayConfig(cfg.id, { mirror: e.target.checked })} />
             Mirror (inverted clone)
           </label>
+          {cfg.mirror && (
+            <label style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 11, marginTop: 2, marginLeft: 16 }}>
+              <input type="checkbox" checked={cfg.mirrorOnly ?? false} onChange={e => updateOverlayConfig(cfg.id, { mirrorOnly: e.target.checked })} />
+              Mirror only (hide original)
+            </label>
+          )}
           <label style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 11, marginTop: 4 }}>
             <input
               type="checkbox"
