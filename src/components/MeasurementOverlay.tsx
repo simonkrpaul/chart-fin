@@ -4,6 +4,7 @@
  */
 import React from 'react';
 import { useChartStore } from '../store/chartStore';
+import { formatDuration } from '../engine/measurementEngine';
 
 export const MeasurementOverlay: React.FC = () => {
   const { lastMeasurement, theme } = useChartStore();
@@ -45,7 +46,7 @@ export const MeasurementOverlay: React.FC = () => {
       }}
     >
       <Cell label="Bars"     value={m.tradingBars} />
-      <Cell label="Days"     value={m.calendarDays} />
+      <Cell label="Time"     value={formatDuration(m.elapsedMs)} />
       <Cell label="Change"   value={`${sign}${m.absoluteMove.toFixed(2)}`} valueColor={moveColor} />
       <Cell label="Change %" value={`${sign}${m.percentMove.toFixed(2)}%`} valueColor={moveColor} />
       <Cell label="High"     value={m.high.toFixed(2)} />

@@ -5,27 +5,53 @@
  */
 import type { CandleSlot, RangeMeasurementResult } from '../types';
 
+const ONE_DAY_MS = 86_400_000;
+
+/** TradingView-style duration, e.g. "3d 4h", "5h 30m", "45m". */
+export function formatDuration(ms: number): string {
+  const sign = ms < 0 ? '-' : '';
+  let rem = Math.round(Math.abs(ms) / 60_000);
+  const d = Math.floor(rem / 1440); rem -= d * 1440;
+  const h = Math.floor(rem / 60);
+  const m = rem - h * 60;
+  if (d > 0) return `${sign}${d}d${h ? ` ${h}h` : ''}`;
+  if (h > 0) return `${sign}${h}h${m ? ` ${m}m` : ''}`;
+  return `${sign}${m}m`;
+}
+
+/**
+ * Measures from `startSlotIndex` to `endSlotIndex` (direction-aware, like
+ * TradingView's Measure tool). When cursor prices are supplied the change
+ * and % are computed between those prices, so the badge matches the box.
+ */
 export function measureRange(
   slots: CandleSlot[],
   startSlotIndex: number,
   endSlotIndex: number,
-  tz: string,
+  _tz: string,
+  startCursorPrice?: number,
+  endCursorPrice?: number,
 ): RangeMeasurementResult {
-  const lo = Math.min(startSlotIndex, endSlotIndex);
-  const hi = Math.max(startSlotIndex, endSlotIndex);
+  const last = Math.max(0, slots.length - 1);
+  const from = Math.min(Math.max(0, startSlotIndex), last);
+  const to = Math.min(Math.max(0, endSlotIndex), last);
+  const lo = Math.min(from, to);
+  const hi = Math.max(from, to);
   const window = slots.slice(lo, hi + 1);
 
   const filled = window.filter(s => s.candle !== null);
-  const tradingBars = filled.length;
+  // TradingView counts bar *intervals* (index difference), skipping empty gap slots.
+  const intervals = window.slice(1).filter(s => s.candle !== null).length;
+  const tradingBars = to >= from ? intervals : -intervals;
 
-  const startSlot = window[0];
-  const endSlot = window[window.length - 1];
+  const startSlot = slots[from];
+  const endSlot = slots[to];
 
-  const startCandle = filled[0]?.candle ?? null;
-  const endCandle = filled[filled.length - 1]?.candle ?? null;
+  const startCandle = startSlot?.candle ?? (to >= from ? filled[0] : filled[filled.length - 1])?.candle ?? null;
+  const endCandle = endSlot?.candle ?? (to >= from ? filled[filled.length - 1] : filled[0])?.candle ?? null;
 
-  const startPrice = startCandle?.open ?? 0;
-  const endPrice = endCandle?.close ?? 0;
+  const startPrice = startCursorPrice ?? startCandle?.close ?? 0;
+  const endPrice = endCursorPrice ?? endCandle?.close ?? 0;
 
   let high = -Infinity;
   let low = Infinity;
@@ -44,18 +70,12 @@ export function measureRange(
   const absoluteMove = endPrice - startPrice;
   const percentMove = startPrice !== 0 ? (absoluteMove / startPrice) * 100 : 0;
 
-  // Compute calendar days from total covered span (first open → last close).
-  // We infer the candle period from adjacent slots so the count is
-  // n_bars × bar_period / ms_per_day, ceiling-divided.  This avoids
-  // timezone-boundary artifacts from calendar-date arithmetic.
-  const ONE_DAY_MS = 86_400_000;
-  const candlePeriodMs = hi > lo ? slots[lo + 1].timestamp - slots[lo].timestamp : 0;
-  const totalSpanMs = endSlot.timestamp - startSlot.timestamp + candlePeriodMs;
-  const calendarDays = Math.max(1, Math.ceil(totalSpanMs / ONE_DAY_MS));
+  const elapsedMs = (endSlot?.timestamp ?? 0) - (startSlot?.timestamp ?? 0);
+  const calendarDays = Math.floor(Math.abs(elapsedMs) / ONE_DAY_MS);
 
   return {
-    startTimestamp: startSlot.timestamp,
-    endTimestamp: endSlot.timestamp,
+    startTimestamp: startSlot?.timestamp ?? 0,
+    endTimestamp: endSlot?.timestamp ?? 0,
     startPrice,
     endPrice,
     calendarDays,
@@ -65,7 +85,7 @@ export function measureRange(
     high,
     low,
     priceRange: high - low,
-    volumeSum: tradingBars > 0 ? volumeSum : null,
-    elapsedMs: endSlot.timestamp - startSlot.timestamp,
+    volumeSum: filled.length > 0 ? volumeSum : null,
+    elapsedMs,
   };
 }

@@ -370,6 +370,11 @@ export interface PositionDrawing extends BaseDrawing {
   slPrice: number;
   /** Risk/Reward ratio */
   riskReward: number;
+  /** Per-trade size override (base asset qty); falls back to manual-backtest sizing */
+  qty?: number;
+  /** Filled at market on the entry bar's close (replay Buy/Sell) – evaluation starts next bar */
+  entryAtClose?: boolean;
+  note?: string;
 }
 
 export type Drawing =

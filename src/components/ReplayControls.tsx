@@ -9,8 +9,12 @@
  *   2. Click any candle on the chart – replay starts from that bar.
  *   3. Use the controls below to play/pause/step/change speed/exit.
  */
-import React, { useEffect } from 'react';
+import React, { useEffect, useMemo } from 'react';
 import { useChartStore } from '../store/chartStore';
+import { useManualTradeStore } from '../store/manualTradeStore';
+import { runManualBacktest } from '../engine/manualBacktest';
+import type { PositionDrawing } from '../types';
+import { randomId } from '../utils/id';
 
 const SPEEDS = [
   { label: '½×',  value: 0.5 },
@@ -83,7 +87,60 @@ export const ReplayControls: React.FC = () => {
     setReplaySpeed,
     tickReplay,
     theme,
+    drawings,
+    startDrawing,
+    commitDrawing,
+    updateDrawing,
   } = useChartStore();
+  const settings = useManualTradeStore(s => s.settings);
+
+  const positions = useMemo(
+    () => drawings.filter((d): d is PositionDrawing => d.tool === 'long_position' || d.tool === 'short_position'),
+    [drawings],
+  );
+  const { stats, summary } = useMemo(
+    () => runManualBacktest(positions, primarySlots, settings, replay.active ? replay.index : undefined),
+    [positions, primarySlots, settings, replay.active, replay.index],
+  );
+  const openIds = stats.filter(t => t.outcome === 'open' || t.outcome === 'waiting').map(t => t.id);
+
+  /** Market order at the current replay bar's close with default SL / R:R. */
+  const placeMarket = (isLong: boolean) => {
+    const slot = primarySlots[replay.index];
+    const price = slot?.candle?.close;
+    if (!slot || price === undefined) return;
+    const slDist = settings.replaySlPoints;
+    const tpDist = slDist * settings.replayRR;
+    const endSi = replay.index + 20;
+    const pd: PositionDrawing = {
+      id: randomId(),
+      tool: isLong ? 'long_position' : 'short_position',
+      color: '#f5c518',
+      lineWidth: 1,
+      visible: true,
+      locked: false,
+      zIndex: 0,
+      entry: { slotIndex: replay.index, timestamp: slot.timestamp, price },
+      end: { slotIndex: endSi, timestamp: primarySlots[endSi]?.timestamp ?? 0, price },
+      tpPrice: isLong ? price + tpDist : price - tpDist,
+      slPrice: isLong ? price - slDist : price + slDist,
+      riskReward: settings.replayRR,
+      entryAtClose: true,
+    };
+    startDrawing(pd);
+    commitDrawing();
+  };
+
+  /** Close open trades at the current bar's close (and cancel unfilled ones). */
+  const closeAll = () => {
+    const slot = primarySlots[replay.index];
+    if (!slot) return;
+    for (const id of openIds) {
+      const d = positions.find(p => p.id === id);
+      if (!d) continue;
+      updateDrawing(id, { end: { ...d.end, slotIndex: replay.index, timestamp: slot.timestamp } } as Partial<PositionDrawing>);
+    }
+  };
 
   // ── Timer ────────────────────────────────────────────────────────────────
   useEffect(() => {
@@ -173,6 +230,27 @@ export const ReplayControls: React.FC = () => {
       {/* Progress indicator */}
       <span style={{ fontSize: 10, opacity: 0.4, color: text }}>
         {replay.index - replay.startIndex + 1}&nbsp;bars
+      </span>
+
+      <ReplaySep border={border} />
+
+      {/* Manual trading at the replay bar */}
+      <ReplayBtn {...btnProps} title={`Buy at bar close (SL ${settings.replaySlPoints} pts, R:R ${settings.replayRR})`} onClick={() => placeMarket(true)}>
+        <span style={{ fontSize: 11, color: '#26a69a', fontWeight: 700 }}>Buy</span>
+      </ReplayBtn>
+      <ReplayBtn {...btnProps} title={`Sell at bar close (SL ${settings.replaySlPoints} pts, R:R ${settings.replayRR})`} onClick={() => placeMarket(false)}>
+        <span style={{ fontSize: 11, color: '#ef5350', fontWeight: 700 }}>Sell</span>
+      </ReplayBtn>
+      <ReplayBtn {...btnProps} title="Close open trades at this bar's close" onClick={closeAll} disabled={openIds.length === 0}>
+        <span style={{ fontSize: 11 }}>Close{openIds.length ? ` (${openIds.length})` : ''}</span>
+      </ReplayBtn>
+      <span style={{ fontSize: 11, color: text, minWidth: 120, textAlign: 'center' }} title="Equity (realized) · open P&L">
+        ${summary.finalEquity.toFixed(2)}
+        {summary.openTrades > 0 && (
+          <span style={{ color: summary.openPnl >= 0 ? '#26a69a' : '#ef5350', marginLeft: 6 }}>
+            {summary.openPnl >= 0 ? '+' : '-'}${Math.abs(summary.openPnl).toFixed(2)}
+          </span>
+        )}
       </span>
 
       <ReplaySep border={border} />

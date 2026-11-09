@@ -380,6 +380,8 @@ export interface ChartActions {
   cancelDrawing: () => void;
   updateDrawing: (id: string, patch: Partial<Drawing>) => void;
   deleteDrawing: (id: string) => void;
+  /** Replaces all long/short position drawings (manual backtest load/clear). */
+  setPositionDrawings: (positions: Drawing[]) => void;
   undoDrawing: () => void;
   redoDrawing: () => void;
 
@@ -391,7 +393,7 @@ export interface ChartActions {
   toggleBacktestReport: () => void;
 
   // Measurements
-  measureSelectedRange: (startSlotIndex: number, endSlotIndex: number) => void;
+  measureSelectedRange: (startSlotIndex: number, endSlotIndex: number, startPrice?: number, endPrice?: number) => void;
 
   // Trade Journal
   loadTradeLog: (csvText: string) => void;
@@ -1067,9 +1069,7 @@ export function createChartStore(panelId: string = 'p1'): StoreApi<ChartState & 
           Math.min(total - 1, state.replay.index + delta),
         );
         state.replay.index = newIndex;
-        const vp = state.viewport;
-        const lookback = Math.floor(vp.visibleSlotCount * 0.7);
-        vp.firstSlotIndex = Math.max(0, newIndex - lookback);
+        _keepReplayCursorVisible(state.viewport, newIndex);
       });
       _autoFitPriceScale(set, get);
     },
@@ -1088,9 +1088,7 @@ export function createChartStore(panelId: string = 'p1'): StoreApi<ChartState & 
       set(state => {
         const newIndex = state.replay.index + 1;
         state.replay.index = newIndex;
-        const vp = state.viewport;
-        const lookback = Math.floor(vp.visibleSlotCount * 0.7);
-        vp.firstSlotIndex = Math.max(0, newIndex - lookback);
+        _keepReplayCursorVisible(state.viewport, newIndex);
       });
       _autoFitPriceScale(set, get);
     },
@@ -1243,10 +1241,18 @@ export function createChartStore(panelId: string = 'p1'): StoreApi<ChartState & 
       let finalDrawing: Drawing = drawingInProgress as Drawing;
       if (drawingInProgress.tool === 'measurement') {
         const d = drawingInProgress as import('../types').MeasurementDrawing;
-        const result = measureRange(primarySlots, d.start.slotIndex, d.end.slotIndex, session.timezone);
+        const result = measureRange(primarySlots, d.start.slotIndex, d.end.slotIndex, session.timezone, d.start.price, d.end.price);
         finalDrawing = { ...d, result };
         // Also update the persistent lastMeasurement so the status bar shows
         set(state => { state.lastMeasurement = result; });
+      }
+      if (drawingInProgress.tool === 'long_position' || drawingInProgress.tool === 'short_position') {
+        const d = drawingInProgress as import('../types').PositionDrawing;
+        // Fallback for positions created programmatically without a window
+        if (d.end.slotIndex <= d.entry.slotIndex) {
+          const endSi = d.entry.slotIndex + 20;
+          finalDrawing = { ...d, end: { ...d.end, slotIndex: endSi, timestamp: primarySlots[endSi]?.timestamp ?? 0 } };
+        }
       }
 
       set(state => {
@@ -1273,6 +1279,17 @@ export function createChartStore(panelId: string = 'p1'): StoreApi<ChartState & 
         state.past.push([...state.drawings]);
         state.future = [];
         state.drawings = state.drawings.filter(d => d.id !== id);
+      });
+    },
+
+    setPositionDrawings: (positions) => {
+      set(state => {
+        state.past.push([...state.drawings]);
+        state.future = [];
+        state.drawings = [
+          ...state.drawings.filter(d => d.tool !== 'long_position' && d.tool !== 'short_position'),
+          ...positions,
+        ];
       });
     },
 
@@ -1376,9 +1393,9 @@ export function createChartStore(panelId: string = 'p1'): StoreApi<ChartState & 
     // MEASUREMENT
     // ────────────────────────────────────────────────────────────────────────
 
-    measureSelectedRange: (startSlotIndex, endSlotIndex) => {
+    measureSelectedRange: (startSlotIndex, endSlotIndex, startPrice, endPrice) => {
       const { primarySlots, session } = get();
-      const result = measureRange(primarySlots, startSlotIndex, endSlotIndex, session.timezone);
+      const result = measureRange(primarySlots, startSlotIndex, endSlotIndex, session.timezone, startPrice, endPrice);
       set(state => { state.lastMeasurement = result; });
     },
 
@@ -1757,6 +1774,17 @@ export function useChartStore(): ChartState & ChartActions {
 // ─────────────────────────────────────────────────────────────────────────────
 // Private helper: auto-fit price scale to visible candles
 // ─────────────────────────────────────────────────────────────────────────────
+
+/** Scroll only when the replay cursor leaves the visible window, so a user-chosen position is kept. */
+function _keepReplayCursorVisible(vp: Viewport, index: number) {
+  const margin = 2;
+  const lastVisible = vp.firstSlotIndex + vp.visibleSlotCount - 1 - margin;
+  if (index > lastVisible) {
+    vp.firstSlotIndex += index - lastVisible;
+  } else if (index < vp.firstSlotIndex) {
+    vp.firstSlotIndex = Math.max(0, index - margin);
+  }
+}
 
 function _autoFitPriceScale(set: any, get: () => ChartState & ChartActions) {
   const { primarySlots, viewport, priceScale, overlays, overlayConfigs, replay, showOverlays } = get();

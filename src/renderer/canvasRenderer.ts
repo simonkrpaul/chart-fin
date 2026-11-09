@@ -36,6 +36,8 @@ import type {
 } from '../types';
 import { FIBONACCI_DEFAULT_LEVELS } from '../types';
 import { TIMEFRAME_MINUTES } from '../engine/calendarEngine';
+import { formatDuration } from '../engine/measurementEngine';
+import { slotIndexAtOrAfter, type PositionStat } from '../engine/manualBacktest';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Coordinate helpers
@@ -2052,13 +2054,7 @@ export function hitTestDrawings(
       case 'long_position':
       case 'short_position': {
         const pd = d as import('../types').PositionDrawing;
-        const entryY = priceToY(pd.entry.price, ps, ph);
-        const tpY = priceToY(pd.tpPrice, ps, ph);
-        const slY = priceToY(pd.slPrice, ps, ph);
-        // Hit if cursor is near any of the 3 horizontal lines
-        if (Math.abs(cy - entryY) <= HIT_TOLERANCE) return d.id;
-        if (Math.abs(cy - tpY) <= HIT_TOLERANCE) return d.id;
-        if (Math.abs(cy - slY) <= HIT_TOLERANCE) return d.id;
+        if (hitTestPositionPart(cx, cy, pd, vp, ps)) return d.id;
         break;
       }
     }
@@ -2088,23 +2084,51 @@ export function hitTestFibPart(
   return null;
 }
 
-/** Returns which part of a position drawing the cursor is near: 'tp', 'sl', 'entry', or null */
+/** Screen-space box of a position drawing (shared by renderer and hit-test). */
+function positionBox(pd: import('../types').PositionDrawing, vp: Viewport): { left: number; width: number } {
+  const sw = slotWidth(vp);
+  const lo = Math.min(pd.entry.slotIndex, pd.end.slotIndex);
+  const hi = Math.max(pd.entry.slotIndex, pd.end.slotIndex, lo + 1);
+  return { left: (lo - vp.firstSlotIndex) * sw, width: (hi - lo) * sw };
+}
+
+export type PositionPart = 'tp' | 'sl' | 'entry' | 'left' | 'right' | 'body';
+
+export interface PositionLabelOptions {
+  showUsd: boolean;
+  showAcctPct: boolean;
+  showBreakeven: boolean;
+}
+
+/**
+ * Which part of a position drawing is under the cursor:
+ * tp/sl lines (vertical resize), left/right edges (horizontal resize),
+ * entry line or box interior (move whole position in time and price).
+ */
 export function hitTestPositionPart(
+  cx: number,
   cy: number,
   drawing: Drawing,
   vp: Viewport,
   ps: PriceScale,
-): 'tp' | 'sl' | 'entry' | null {
+): PositionPart | null {
   if (drawing.tool !== 'long_position' && drawing.tool !== 'short_position') return null;
   const pd = drawing as import('../types').PositionDrawing;
   const ph = vp.mainPaneHeight;
   const HIT = 8;
+  const { left, width } = positionBox(pd, vp);
+  const right = left + width;
+  if (cx < left - HIT || cx > right + HIT) return null;
   const entryY = priceToY(pd.entry.price, ps, ph);
   const tpY = priceToY(pd.tpPrice, ps, ph);
   const slY = priceToY(pd.slPrice, ps, ph);
+  const top = Math.min(tpY, slY), bot = Math.max(tpY, slY);
   if (Math.abs(cy - tpY) <= HIT) return 'tp';
   if (Math.abs(cy - slY) <= HIT) return 'sl';
+  if (Math.abs(cx - left) <= HIT && cy >= top && cy <= bot) return 'left';
+  if (Math.abs(cx - right) <= HIT && cy >= top && cy <= bot) return 'right';
   if (Math.abs(cy - entryY) <= HIT) return 'entry';
+  if (cx >= left && cx <= right && cy >= top && cy <= bot) return 'body';
   return null;
 }
 
@@ -2113,6 +2137,8 @@ export function renderDrawings(
   drawings: Drawing[],
   slots: CandleSlot[],
   hoveredId?: string,
+  positionStats?: Map<string, PositionStat>,
+  labelOpts?: PositionLabelOptions,
 ): void {
   const { ctx, viewport: vp, priceScale: ps } = rc;
   const sw = slotWidth(vp);
@@ -2174,8 +2200,11 @@ export function renderDrawings(
         case 'long_position':
         case 'short_position': {
           const pd = hd as import('../types').PositionDrawing;
-          const entryY = priceToY(pd.entry.price, ps, ph);
-          ctx.beginPath(); ctx.moveTo(0, entryY); ctx.lineTo(pw, entryY); ctx.stroke();
+          const { left, width } = positionBox(pd, vp);
+          const tpY = priceToY(pd.tpPrice, ps, ph);
+          const slY = priceToY(pd.slPrice, ps, ph);
+          ctx.lineWidth = 3;
+          ctx.strokeRect(left, Math.min(tpY, slY), width, Math.abs(tpY - slY));
           break;
         }
       }
@@ -2265,8 +2294,8 @@ export function renderDrawings(
           const pad   = 6;
           const lh    = 15;
           const badgeH = lh * 2 + pad * 2;
-          const row1  = `${sign}${pct.toFixed(2)}%  ${absSign}${r.absoluteMove.toFixed(2)}`;
-          const row2  = `${r.tradingBars} bars  ·  ${r.calendarDays} days`;
+          const row1  = `${absSign}${r.absoluteMove.toFixed(2)} (${sign}${pct.toFixed(2)}%)`;
+          const row2  = `${r.tradingBars} bars, ${formatDuration(r.elapsedMs)}`;
 
           ctx.font = 'bold 11px -apple-system, BlinkMacSystemFont, sans-serif';
           const w1 = ctx.measureText(row1).width;
@@ -2306,7 +2335,7 @@ export function renderDrawings(
             ctx.font = 'bold 11px monospace';
             ctx.textAlign = 'left';
             ctx.fillText(
-              `${sign}${pct.toFixed(2)}%  ${r.tradingBars}b  ${r.calendarDays}d`,
+              `${sign}${pct.toFixed(2)}%  ${r.tradingBars}b  ${formatDuration(r.elapsedMs)}`,
               left,
               top - 5,
             );
@@ -2388,101 +2417,141 @@ export function renderDrawings(
         const entryY = priceToY(pd.entry.price, ps, ph);
         const tpY = priceToY(pd.tpPrice, ps, ph);
         const slY = priceToY(pd.slPrice, ps, ph);
-        const leftX = (pd.entry.slotIndex - vp.firstSlotIndex) * sw;
-        const rightX = (pd.end.slotIndex - vp.firstSlotIndex) * sw + sw;
-        const boxLeft = Math.min(leftX, rightX);
-        const boxRight = Math.max(leftX, rightX);
-        const boxWidth = Math.max(boxRight - boxLeft, sw * 4);
+        const { left: boxLeft, width: boxWidth } = positionBox(pd, vp);
+        const boxRight = boxLeft + boxWidth;
+        const st = positionStats?.get(pd.id);
 
         const profitColor = '#26a69a';  // green
         const lossColor = '#ef5350';    // red
         const entryColor = '#2962ff';   // blue
+        const beColor = '#f5a623';      // amber
 
-        // TP zone (profit)
-        const tpTop = Math.min(entryY, tpY);
-        const tpBot = Math.max(entryY, tpY);
-        ctx.fillStyle = colorWithAlpha(profitColor, 0.12);
-        ctx.fillRect(boxLeft, tpTop, boxWidth, tpBot - tpTop);
-        ctx.strokeStyle = profitColor;
-        ctx.lineWidth = 1.5;
-        ctx.setLineDash([]);
-        ctx.beginPath();
-        ctx.moveTo(boxLeft, tpY);
-        ctx.lineTo(boxLeft + boxWidth, tpY);
-        ctx.stroke();
-
-        // TP drag handle (small filled square)
-        ctx.fillStyle = profitColor;
-        ctx.fillRect(boxLeft + boxWidth / 2 - 5, tpY - 5, 10, 10);
-        // Arrow icon on handle
-        ctx.fillStyle = '#fff';
-        ctx.font = '8px sans-serif';
-        ctx.textAlign = 'center';
-        ctx.textBaseline = 'middle';
-        ctx.fillText('↕', boxLeft + boxWidth / 2, tpY);
-
-        // SL zone (loss)
-        const slTop = Math.min(entryY, slY);
-        const slBot = Math.max(entryY, slY);
-        ctx.fillStyle = colorWithAlpha(lossColor, 0.12);
-        ctx.fillRect(boxLeft, slTop, boxWidth, slBot - slTop);
-        ctx.strokeStyle = lossColor;
-        ctx.lineWidth = 1.5;
-        ctx.beginPath();
-        ctx.moveTo(boxLeft, slY);
-        ctx.lineTo(boxLeft + boxWidth, slY);
-        ctx.stroke();
-
-        // SL drag handle (small filled square)
-        ctx.fillStyle = lossColor;
-        ctx.fillRect(boxLeft + boxWidth / 2 - 5, slY - 5, 10, 10);
-        ctx.fillStyle = '#fff';
-        ctx.font = '8px sans-serif';
-        ctx.textAlign = 'center';
-        ctx.textBaseline = 'middle';
-        ctx.fillText('↕', boxLeft + boxWidth / 2, slY);
-
-        // Entry line
-        ctx.strokeStyle = entryColor;
-        ctx.lineWidth = 1.5;
-        ctx.setLineDash([4, 3]);
-        ctx.beginPath();
-        ctx.moveTo(boxLeft, entryY);
-        ctx.lineTo(boxLeft + boxWidth, entryY);
-        ctx.stroke();
-        ctx.setLineDash([]);
-
-        // Labels
-        ctx.font = 'bold 10px -apple-system, sans-serif';
-        ctx.textAlign = 'left';
-        const labelX = boxLeft + boxWidth + 6;
-
-        // TP label
-        const tpPct = ((pd.tpPrice - pd.entry.price) / pd.entry.price * 100) * (isLong ? 1 : -1);
-        ctx.fillStyle = profitColor;
-        ctx.fillText(`TP ${pd.tpPrice.toFixed(2)} (${tpPct >= 0 ? '+' : ''}${tpPct.toFixed(2)}%)`, labelX, tpY + 4);
-
-        // SL label
-        const slPct = ((pd.slPrice - pd.entry.price) / pd.entry.price * 100) * (isLong ? 1 : -1);
-        ctx.fillStyle = lossColor;
-        ctx.fillText(`SL ${pd.slPrice.toFixed(2)} (${slPct >= 0 ? '+' : ''}${slPct.toFixed(2)}%)`, labelX, slY + 4);
-
-        // Entry label
-        ctx.fillStyle = entryColor;
-        ctx.fillText(`${isLong ? 'LONG' : 'SHORT'} @ ${pd.entry.price.toFixed(2)}`, labelX, entryY + 4);
-
-        // R:R badge
-        if (pd.riskReward > 0) {
-          const badgeText = `R:R  1:${pd.riskReward.toFixed(2)}`;
-          const badgeX = boxLeft + 6;
-          const badgeY = isLong ? tpY + 8 : tpY - 8;
-          ctx.font = 'bold 11px -apple-system, sans-serif';
-          ctx.fillStyle = profitColor;
-          ctx.textAlign = 'left';
-          ctx.textBaseline = isLong ? 'top' : 'bottom';
-          ctx.fillText(badgeText, badgeX, badgeY);
+        const drawHandle = (x: number, y: number, color: string, glyph: string) => {
+          ctx.fillStyle = color;
+          ctx.fillRect(x - 5, y - 5, 10, 10);
+          ctx.fillStyle = '#fff';
+          ctx.font = '8px sans-serif';
+          ctx.textAlign = 'center';
+          ctx.textBaseline = 'middle';
+          ctx.fillText(glyph, x, y);
           ctx.textBaseline = 'alphabetic';
+        };
+        const hLine = (y: number, color: string, dash: number[]) => {
+          ctx.strokeStyle = color;
+          ctx.lineWidth = 1.5;
+          ctx.setLineDash(dash);
+          ctx.beginPath();
+          ctx.moveTo(boxLeft, y);
+          ctx.lineTo(boxRight, y);
+          ctx.stroke();
+          ctx.setLineDash([]);
+        };
+        const usd = (n: number) => `${n < 0 ? '-' : '+'}$${Math.abs(n).toFixed(2)}`;
+        const acctPct = (n: number) => st && st.equityBefore > 0
+          ? ` (${n >= 0 ? '+' : ''}${(n / st.equityBefore * 100).toFixed(2)}% acct)`
+          : '';
+
+        // Zones
+        ctx.fillStyle = colorWithAlpha(profitColor, 0.12);
+        ctx.fillRect(boxLeft, Math.min(entryY, tpY), boxWidth, Math.abs(tpY - entryY));
+        ctx.fillStyle = colorWithAlpha(lossColor, 0.12);
+        ctx.fillRect(boxLeft, Math.min(entryY, slY), boxWidth, Math.abs(slY - entryY));
+
+        hLine(tpY, profitColor, []);
+        hLine(slY, lossColor, []);
+        hLine(entryY, entryColor, [4, 3]);
+
+        // Fee break-even level
+        if (st && st.breakevenPoints > 0 && (labelOpts?.showBreakeven ?? true)) {
+          const bePrice = pd.entry.price + (isLong ? st.breakevenPoints : -st.breakevenPoints);
+          const beY = priceToY(bePrice, ps, ph);
+          ctx.globalAlpha = 0.9;
+          hLine(beY, beColor, [2, 3]);
+          ctx.globalAlpha = 1;
+          ctx.font = '9px -apple-system, sans-serif';
+          ctx.fillStyle = beColor;
+          ctx.textAlign = 'left';
+          ctx.fillText(`BE ${st.breakevenPoints.toFixed(1)} pts`, boxLeft + 4, beY + (isLong ? -3 : 10));
         }
+
+        // Trade path: entry → exit
+        if (st && st.exitTs !== null && st.exitPrice !== null && st.outcome !== 'not_triggered') {
+          const exitSi = slotIndexAtOrAfter(slots, st.exitTs);
+          const ex = (exitSi - vp.firstSlotIndex) * sw + sw / 2;
+          const ey = priceToY(st.exitPrice, ps, ph);
+          const pathColor = st.netPnl >= 0 ? profitColor : lossColor;
+          ctx.strokeStyle = pathColor;
+          ctx.lineWidth = 1;
+          ctx.setLineDash([3, 3]);
+          ctx.beginPath();
+          ctx.moveTo(boxLeft, entryY);
+          ctx.lineTo(ex, ey);
+          ctx.stroke();
+          ctx.setLineDash([]);
+          ctx.fillStyle = pathColor;
+          ctx.beginPath();
+          ctx.arc(ex, ey, 4, 0, Math.PI * 2);
+          ctx.fill();
+        }
+
+        // Handles: top/bottom resize vertically, left/right resize horizontally
+        drawHandle(boxLeft + boxWidth / 2, tpY, profitColor, '↕');
+        drawHandle(boxLeft + boxWidth / 2, slY, lossColor, '↕');
+        drawHandle(boxLeft, entryY, entryColor, '↔');
+        drawHandle(boxRight, entryY, entryColor, '↔');
+
+        // Labels sit above the top line and below the bottom line so they don't cover candles
+        const showUsd = labelOpts?.showUsd ?? true;
+        const showAcct = labelOpts?.showAcctPct ?? true;
+        const tpPts = Math.abs(pd.tpPrice - pd.entry.price);
+        const slPts = Math.abs(pd.slPrice - pd.entry.price);
+        const tpPct = (tpPts / pd.entry.price) * 100;
+        const slPct = (slPts / pd.entry.price) * 100;
+        const money = (n: number) => (st && showUsd ? `  ${usd(n)}` : '') + (st && showAcct ? acctPct(n) : '');
+
+        const tpText = `Target ${pd.tpPrice.toFixed(2)} (${tpPct.toFixed(2)}%) ${tpPts.toFixed(1)} pts${st ? money(st.tpNet) : ''}`;
+        const slText = `Stop ${pd.slPrice.toFixed(2)} (${slPct.toFixed(2)}%) ${slPts.toFixed(1)} pts${st ? money(st.slNet) : ''}`;
+
+        let outcomeTxt = '';
+        if (st) {
+          const pnlPts = st.exitPrice !== null ? (st.exitPrice - pd.entry.price) * (isLong ? 1 : -1) : 0;
+          const result = showUsd ? usd(st.netPnl) : `${pnlPts >= 0 ? '+' : ''}${pnlPts.toFixed(1)} pts`;
+          const outcomeText: Record<string, string> = {
+            tp: `TP hit ${result}`,
+            sl: `SL hit ${result}`,
+            closed: `Closed ${result}`,
+            open: `Open ${result}`,
+            not_triggered: 'Not triggered',
+            waiting: 'Waiting for entry',
+          };
+          outcomeTxt = `  ·  ${outcomeText[st.outcome]}`;
+        }
+        const qtyTxt = st ? ` ${+st.qty.toFixed(6)}` : '';
+        const rrTxt = pd.riskReward > 0 ? `  R:R ${pd.riskReward.toFixed(2)}` : '';
+        const feeTxt = st && showUsd ? `  fee ≈ $${st.estFee.toFixed(2)}` : '';
+        const header = `${isLong ? 'LONG' : 'SHORT'}${qtyTxt} @ ${pd.entry.price.toFixed(2)}${rrTxt}${feeTxt}${outcomeTxt}`;
+
+        const drawLabelBox = (rows: string[], edgeY: number, above: boolean, color: string) => {
+          ctx.font = 'bold 10px -apple-system, sans-serif';
+          ctx.textAlign = 'left';
+          ctx.textBaseline = 'alphabetic';
+          const pad = 4, lh = 13;
+          const w = Math.max(...rows.map(r => ctx.measureText(r).width)) + pad * 2;
+          const h = rows.length * lh + pad * 2 - 2;
+          const x = Math.max(2, Math.min(boxLeft + boxWidth / 2 - w / 2, pw - w - 2));
+          const y = above ? edgeY - 4 - h : edgeY + 4;
+          ctx.fillStyle = colorWithAlpha(color, 0.9);
+          ctx.beginPath();
+          (ctx as CanvasRenderingContext2D).roundRect?.(x, y, w, h, 3);
+          ctx.fill();
+          ctx.fillStyle = '#fff';
+          rows.forEach((r, i) => ctx.fillText(r, x + pad, y + pad + lh * (i + 1) - 3));
+        };
+
+        const upperY = Math.min(tpY, slY);
+        const lowerY = Math.max(tpY, slY);
+        drawLabelBox([header, isLong ? tpText : slText], upperY, true, isLong ? profitColor : lossColor);
+        drawLabelBox([isLong ? slText : tpText], lowerY, false, isLong ? lossColor : profitColor);
 
         break;
       }

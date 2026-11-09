@@ -5,12 +5,14 @@
  * Uses requestAnimationFrame-based rendering with dirty-flag optimization:
  * only re-renders when relevant state changes.
  */
-import React, { useRef, useEffect, useCallback, useState, useContext } from 'react';
+import React, { useRef, useEffect, useCallback, useState, useContext, useMemo } from 'react';
 import { useChartStore, ChartStoreContext } from '../store/chartStore';
+import { useManualTradeStore } from '../store/manualTradeStore';
+import { runManualBacktest } from '../engine/manualBacktest';
 import { registerChartExporter } from '../renderer/chartExport';
 import { useHurstStore } from '../hurst/hurstStore';
 import { renderHurst } from '../hurst/renderer';
-import type { Drawing, DrawingPoint } from '../types';
+import type { Drawing, DrawingPoint, PositionDrawing } from '../types';
 import { measureRange } from '../engine/measurementEngine';
 import {
   renderBackground,
@@ -28,6 +30,7 @@ import {
   renderTimeAxis,
   hitTestDrawings,
   hitTestPositionPart,
+  type PositionPart,
   hitTestFibPart,
   renderBacktestSignals,
   renderTradeLog,
@@ -103,6 +106,17 @@ export const ChartCanvas: React.FC<Props> = ({ width, height }) => {
   const hurstConfig = useHurstStore(s => s.config);
   const hurstOutput = useHurstStore(s => s.output);
 
+  const manualSettings = useManualTradeStore(s => s.settings);
+  const positionStats = useMemo(() => {
+    const all = drawingInProgress ? [...drawings, drawingInProgress] : drawings;
+    const positions = all.filter(
+      (d): d is PositionDrawing => d.tool === 'long_position' || d.tool === 'short_position',
+    );
+    if (!positions.length) return undefined;
+    const { stats } = runManualBacktest(positions, primarySlots, manualSettings, replay.active ? replay.index : undefined);
+    return new Map(stats.map(s => [s.id, s]));
+  }, [drawings, drawingInProgress, primarySlots, manualSettings, replay.active, replay.index]);
+
   // Bar-pattern drag state (ref to avoid re-renders mid-drag)
   const patternDragStart = useRef<number | null>(null);
   const patternDragEnd   = useRef<number | null>(null);
@@ -135,13 +149,13 @@ export const ChartCanvas: React.FC<Props> = ({ width, height }) => {
   const justStartedDrawing = useRef(false);
 
   // Track hovered position part for cursor
-  const hoveredPositionPart = useRef<'tp' | 'sl' | 'entry' | null>(null);
+  const hoveredPositionPart = useRef<PositionPart | null>(null);
 
   // Drag-to-adjust committed drawings
   const draggingDrawing = useRef<{
     id: string;
     tool: string;
-    anchor: 'start' | 'end' | 'entry' | 'body' | 'tp' | 'sl';
+    anchor: 'start' | 'end' | 'body' | PositionPart;
     startPrice: number;
     startSlotIndex: number;
     origDrawing: any;
@@ -201,7 +215,7 @@ export const ChartCanvas: React.FC<Props> = ({ width, height }) => {
     renderHurst(rc, primarySlots, hurstConfig, hurstOutput);
     renderOverlays(rc, visibleOverlays as any);
     renderIndicators(rc, visibleIndicators as any, primarySlots);
-    renderDrawings(rc, allDrawings as Drawing[], primarySlots, hoveredId ?? undefined);
+    renderDrawings(rc, allDrawings as Drawing[], primarySlots, hoveredId ?? undefined, positionStats, manualSettings);
 
     // Backtest buy/sell arrows + P&L bands
     if (showBacktestSignals && backtestSignals.length > 0) {
@@ -283,6 +297,8 @@ export const ChartCanvas: React.FC<Props> = ({ width, height }) => {
     cycleCombinerOutput,
     hurstConfig,
     hurstOutput,
+    positionStats,
+    manualSettings,
   ]);
 
   const render = useCallback(() => {
@@ -329,6 +345,13 @@ export const ChartCanvas: React.FC<Props> = ({ width, height }) => {
   function screenYToPrice(y: number): number {
     const { min, max } = priceScale;
     return max - (y / viewport.mainPaneHeight) * (max - min);
+  }
+
+  /** Position window always extends right of the entry; a click without horizontal drag gets 20 bars. */
+  function positionEnd(entry: DrawingPoint, si: number, price: number): DrawingPoint {
+    const width = Math.abs(si - entry.slotIndex);
+    const endSi = entry.slotIndex + (width >= 1 ? width : 20);
+    return { slotIndex: endSi, timestamp: primarySlots[endSi]?.timestamp ?? 0, price };
   }
 
   function snapToSlot(slotIndex: number): DrawingPoint {
@@ -416,7 +439,7 @@ export const ChartCanvas: React.FC<Props> = ({ width, height }) => {
         if (hit) {
           const d = drawings.find(dr => dr.id === hit);
           if (d && (d.tool === 'long_position' || d.tool === 'short_position')) {
-            hoveredPositionPart.current = hitTestPositionPart(y, d, viewport, priceScale);
+            hoveredPositionPart.current = hitTestPositionPart(x, y, d, viewport, priceScale);
           } else {
             hoveredPositionPart.current = null;
           }
@@ -480,7 +503,8 @@ export const ChartCanvas: React.FC<Props> = ({ width, height }) => {
             const newEnd = { ...orig.end, price: orig.end.price + priceDelta, slotIndex: orig.end.slotIndex + slotDelta };
             newStart.timestamp = primarySlots[newStart.slotIndex]?.timestamp ?? newStart.timestamp;
             newEnd.timestamp = primarySlots[newEnd.slotIndex]?.timestamp ?? newEnd.timestamp;
-            updateDrawing(dd.id, { start: newStart, end: newEnd } as any);
+            const result = measureRange(primarySlots, newStart.slotIndex, newEnd.slotIndex, 'UTC', newStart.price, newEnd.price);
+            updateDrawing(dd.id, { start: newStart, end: newEnd, result } as any);
             break;
           }
           case 'fibonacci': {
@@ -506,41 +530,42 @@ export const ChartCanvas: React.FC<Props> = ({ width, height }) => {
           }
           case 'long_position':
           case 'short_position': {
+            const at = (si: number) => primarySlots[si]?.timestamp ?? 0;
+            let entry = orig.entry;
+            let end = orig.end;
+            let tpPrice = orig.tpPrice;
+            let slPrice = orig.slPrice;
+            const isLong = orig.tool === 'long_position';
+            // Keep a tiny gap so TP/SL can't cross the entry and flip the trade
+            const minGap = Math.abs(orig.entry.price) * 1e-5 || 1e-6;
             if (dd.anchor === 'tp') {
-              // Drag only TP price independently
-              updateDrawing(dd.id, { tpPrice: orig.tpPrice + priceDelta } as any);
+              const p = orig.tpPrice + priceDelta;
+              tpPrice = isLong ? Math.max(p, entry.price + minGap) : Math.min(p, entry.price - minGap);
             } else if (dd.anchor === 'sl') {
-              // Drag only SL price independently
-              updateDrawing(dd.id, { slPrice: orig.slPrice + priceDelta } as any);
-            } else if (dd.anchor === 'entry') {
-              // Move entry, keep TP/SL distances the same
-              const newEntry = { ...orig.entry, price: orig.entry.price + priceDelta, slotIndex: orig.entry.slotIndex + slotDelta };
-              newEntry.timestamp = primarySlots[newEntry.slotIndex]?.timestamp ?? newEntry.timestamp;
-              updateDrawing(dd.id, {
-                entry: newEntry,
-                tpPrice: orig.tpPrice + priceDelta,
-                slPrice: orig.slPrice + priceDelta,
-              } as any);
+              const p = orig.slPrice + priceDelta;
+              slPrice = isLong ? Math.min(p, entry.price - minGap) : Math.max(p, entry.price + minGap);
+            } else if (dd.anchor === 'right') {
+              const endSi = Math.max(orig.entry.slotIndex + 1, orig.end.slotIndex + slotDelta);
+              end = { ...orig.end, slotIndex: endSi, timestamp: at(endSi) };
+            } else if (dd.anchor === 'left') {
+              // Left edge is the entry time; price levels stay put
+              const entrySi = Math.min(orig.end.slotIndex - 1, orig.entry.slotIndex + slotDelta);
+              entry = { ...orig.entry, slotIndex: entrySi, timestamp: at(entrySi) || orig.entry.timestamp };
             } else {
-              // Move the whole drawing
-              const newEntry = { ...orig.entry, price: orig.entry.price + priceDelta, slotIndex: orig.entry.slotIndex + slotDelta };
-              const newEnd = { ...orig.end, price: orig.end.price + priceDelta, slotIndex: orig.end.slotIndex + slotDelta };
-              newEntry.timestamp = primarySlots[newEntry.slotIndex]?.timestamp ?? newEntry.timestamp;
-              newEnd.timestamp = primarySlots[newEnd.slotIndex]?.timestamp ?? newEnd.timestamp;
-              updateDrawing(dd.id, {
-                entry: newEntry,
-                end: newEnd,
-                tpPrice: orig.tpPrice + priceDelta,
-                slPrice: orig.slPrice + priceDelta,
-              } as any);
+              // Entry line or box body: move the whole position in time and price
+              const entrySi = orig.entry.slotIndex + slotDelta;
+              const endSi = orig.end.slotIndex + slotDelta;
+              entry = { ...orig.entry, price: orig.entry.price + priceDelta, slotIndex: entrySi, timestamp: at(entrySi) || orig.entry.timestamp };
+              end = { ...orig.end, price: orig.end.price + priceDelta, slotIndex: endSi, timestamp: at(endSi) };
+              tpPrice = orig.tpPrice + priceDelta;
+              slPrice = orig.slPrice + priceDelta;
             }
-            // Recompute R:R
-            const d = drawings.find(dr => dr.id === dd.id) as any;
-            if (d) {
-              const risk = Math.abs(d.entry.price - d.slPrice);
-              const reward = Math.abs(d.tpPrice - d.entry.price);
-              if (risk > 0) updateDrawing(dd.id, { riskReward: reward / risk } as any);
-            }
+            const risk = Math.abs(entry.price - slPrice);
+            const reward = Math.abs(tpPrice - entry.price);
+            updateDrawing(dd.id, {
+              entry, end, tpPrice, slPrice,
+              riskReward: risk > 0 ? reward / risk : 0,
+            } as any);
             break;
           }
         }
@@ -561,7 +586,7 @@ export const ChartCanvas: React.FC<Props> = ({ width, height }) => {
             break;
           case 'long_position':
           case 'short_position':
-            updated.end = p;
+            updated.end = positionEnd(updated.entry, si, price);
             {
               const entry = updated.entry.price;
               const isLong = activeDrawingTool === 'long_position';
@@ -604,9 +629,11 @@ export const ChartCanvas: React.FC<Props> = ({ width, height }) => {
             updated.start.slotIndex,
             si,
             'UTC',
+            updated.start.price,
+            price,
           );
           // Also update status bar live
-          measureSelectedRange(updated.start.slotIndex, si);
+          measureSelectedRange(updated.start.slotIndex, si, updated.start.price, price);
         }
         updateDrawingInProgress(updated);
       }
@@ -630,9 +657,9 @@ export const ChartCanvas: React.FC<Props> = ({ width, height }) => {
           const d = drawings.find(dr => dr.id === hit) as any;
           if (d && !d.locked) {
             // For position drawings, detect which part was hit (tp/sl/entry)
-            let anchor: 'body' | 'tp' | 'sl' | 'entry' | 'start' | 'end' = 'body';
+            let anchor: 'start' | 'end' | 'body' | PositionPart = 'body';
             if (d.tool === 'long_position' || d.tool === 'short_position') {
-              const part = hitTestPositionPart(y, d, viewport, priceScale);
+              const part = hitTestPositionPart(x, y, d, viewport, priceScale);
               if (part) anchor = part;
             } else if (d.tool === 'fibonacci') {
               const part = hitTestFibPart(x, y, d, viewport, priceScale);
@@ -688,7 +715,7 @@ export const ChartCanvas: React.FC<Props> = ({ width, height }) => {
             break;
           case 'long_position':
           case 'short_position': {
-            updated.end = p;
+            updated.end = positionEnd(updated.entry, si, price);
             const entry = updated.entry.price;
             const isLong = activeDrawingTool === 'long_position';
             const dragPrice = price;
@@ -1086,11 +1113,15 @@ export const ChartCanvas: React.FC<Props> = ({ width, height }) => {
               : isDragging
                 ? (draggingDrawing.current?.anchor === 'tp' || draggingDrawing.current?.anchor === 'sl')
                   ? 'ns-resize'
-                  : 'grabbing'
+                  : draggingDrawing.current?.anchor === 'right' || draggingDrawing.current?.anchor === 'left'
+                    ? 'ew-resize'
+                    : 'grabbing'
                 : hoveredId
                   ? (hoveredPositionPart.current === 'tp' || hoveredPositionPart.current === 'sl')
                     ? 'ns-resize'
-                    : 'move'
+                    : hoveredPositionPart.current === 'right' || hoveredPositionPart.current === 'left'
+                      ? 'ew-resize'
+                      : 'move'
                   : 'grab',
         }}
         onPointerMove={handlePointerMove}
@@ -1124,6 +1155,34 @@ export const ChartCanvas: React.FC<Props> = ({ width, height }) => {
               minWidth: 140,
             }}
           >
+            {(() => {
+              const pd = drawings.find(d => d.id === contextMenu.drawingId);
+              if (!pd || (pd.tool !== 'long_position' && pd.tool !== 'short_position')) return null;
+              return (
+                <button
+                  style={{
+                    display: 'block', width: '100%', padding: '8px 14px', background: 'transparent',
+                    color: '#d1d4dc', border: 'none', textAlign: 'left', fontSize: 13, cursor: 'pointer',
+                  }}
+                  onPointerDown={e => e.stopPropagation()}
+                  onClick={() => {
+                    const isLong = pd.tool === 'long_position';
+                    const sl = manualSettings.replaySlPoints;
+                    const tp = sl * manualSettings.replayRR;
+                    const endSi = pd.entry.slotIndex + 20;
+                    updateDrawing(pd.id, {
+                      end: { ...pd.end, slotIndex: endSi, timestamp: primarySlots[endSi]?.timestamp ?? 0 },
+                      tpPrice: pd.entry.price + (isLong ? tp : -tp),
+                      slPrice: pd.entry.price + (isLong ? -sl : sl),
+                      riskReward: manualSettings.replayRR,
+                    } as Partial<PositionDrawing>);
+                    setContextMenu(null);
+                  }}
+                >
+                  ↺ Reset size ({manualSettings.replaySlPoints} pts SL, 1:{manualSettings.replayRR}, 20 bars)
+                </button>
+              );
+            })()}
             <button
               style={{
                 display: 'block',
