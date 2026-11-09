@@ -218,7 +218,7 @@ pip install pandas requests
 
 The `scripts/bybit_sync.py` script downloads full BTCUSDT 1-minute history from Bybit
 and saves it to `public/data/`. On the first run it fetches up to 5 years; on subsequent
-runs it only fetches the gap since the last sync.
+runs it only appends the gap since the last sync — existing history is never trimmed.
 
 ```bash
 # Full sync (first time — takes ~20-40 minutes for 5 years)
@@ -227,8 +227,11 @@ python scripts/bybit_sync.py
 # After being offline for a week — only syncs the missing gap
 python scripts/bybit_sync.py
 
-# Custom history depth (e.g. 2 years)
+# Custom first-sync depth (e.g. 2 years)
 python scripts/bybit_sync.py --years 2
+
+# One-time: merge Kaggle Bitcoin history (2012→) under the Bybit series, then sync to now
+python scripts/bybit_sync.py --seed public/data/data_kaggle/btcusd_1-min_data.csv
 ```
 
 Output files written to `public/data/`:

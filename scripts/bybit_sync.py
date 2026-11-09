@@ -35,6 +35,13 @@ Usage
 
   # Legacy flat layout (public/data/bybit_btcusdt_1m.csv, no manifest update)
   python scripts/bybit_sync.py --legacy
+
+  # Merge a Kaggle 1m dump into the existing series, then sync the gap.
+  # Bybit bars win where timestamps overlap.
+  python scripts/bybit_sync.py --seed public/data/data_kaggle/btcusd_1-min_data.csv
+
+Existing history is never trimmed: --years only sets the depth of the very
+first sync (when no 1m file exists yet). Later runs append new bars only.
 """
 
 import argparse
@@ -58,7 +65,8 @@ from _manifest import rebuild_manifest
 
 parser = argparse.ArgumentParser(description="Sync a Bybit pair into the manifest layout")
 parser.add_argument("--symbol", default="BTCUSDT", help="Trading pair (default: BTCUSDT)")
-parser.add_argument("--years", type=float, default=5.0, help="Years of history to fetch (default: 5)")
+parser.add_argument("--years", type=float, default=5.0, help="Years of history for the first sync only (default: 5)")
+parser.add_argument("--seed", default=None, help="1m CSV (e.g. Kaggle btcusd_1-min_data.csv) to merge under the existing data")
 parser.add_argument("--category", default="linear", help="Bybit category: linear | inverse | spot (default: linear)")
 parser.add_argument("--market", default="crypto", help="Market bucket under public/data/markets/ (default: crypto)")
 parser.add_argument("--out-dir", default=None, help="Override output directory (advanced)")
@@ -112,6 +120,7 @@ BYBIT_KLINE_URL = "https://api.bybit.com/v5/market/kline"
 LIMIT = 1000          # max per request
 ONE_MIN_MS = 60_000
 RATE_LIMIT_SLEEP = 0.12  # ~8 requests/sec to stay well under Bybit limits
+MAX_RETRIES = 5
 
 
 def fetch_bybit_klines(symbol: str, interval: str, start_ms: int, end_ms: int, category: str = "linear") -> pd.DataFrame:
@@ -123,6 +132,7 @@ def fetch_bybit_klines(symbol: str, interval: str, start_ms: int, end_ms: int, c
     cursor_end = end_ms
     request_count = 0
     last_progress = -1
+    failures = 0
 
     total_span = end_ms - start_ms
     print(f"Fetching {symbol} {interval} from Bybit ({category}) …")
@@ -142,9 +152,15 @@ def fetch_bybit_klines(symbol: str, interval: str, start_ms: int, end_ms: int, c
             resp = requests.get(BYBIT_KLINE_URL, params=params, timeout=30)
             resp.raise_for_status()
         except requests.RequestException as e:
-            print(f"\n  ⚠ Request error: {e}. Retrying in 5s …")
+            failures += 1
+            if failures >= MAX_RETRIES:
+                # Pagination runs newest→oldest, so a partial result would leave a hole after the stored data.
+                print(f"\n  ✗ Bybit unreachable after {MAX_RETRIES} attempts: {e}\n  Discarding partial fetch; existing data is kept.")
+                return pd.DataFrame(columns=["timestamp", "open", "high", "low", "close", "volume"])
+            print(f"\n  ⚠ Request error: {e}. Retrying in 5s ({failures}/{MAX_RETRIES}) …")
             time.sleep(5)
             continue
+        failures = 0
 
         data = resp.json()
         result_list = data.get("result", {}).get("list", [])
@@ -200,11 +216,42 @@ def load_existing(filepath: pathlib.Path) -> pd.DataFrame:
         return pd.DataFrame(columns=["timestamp", "open", "high", "low", "close", "volume"])
     try:
         df = pd.read_csv(filepath)
-        df["timestamp"] = df["timestamp"].astype(int)
+        df["timestamp"] = df["timestamp"].astype("int64")
+        df = df[["timestamp", "open", "high", "low", "close", "volume"]]
         return df.sort_values("timestamp").reset_index(drop=True)
     except Exception as e:
-        print(f"  ⚠ Could not read {filepath}: {e}. Starting fresh.")
-        return pd.DataFrame(columns=["timestamp", "open", "high", "low", "close", "volume"])
+        # Refuse to continue: starting fresh would overwrite the file with a short history.
+        sys.exit(f"  ⚠ Could not read {filepath}: {e}. Aborting so existing data is not overwritten.")
+
+
+def load_seed(filepath: pathlib.Path) -> pd.DataFrame:
+    """Load an external 1m CSV (Kaggle style: Timestamp in seconds, capitalised columns)."""
+    if not filepath.exists():
+        sys.exit(f"Seed file not found: {filepath}")
+    print(f"Reading seed file {filepath} …")
+    df = pd.read_csv(filepath)
+    df.columns = [c.strip().lower() for c in df.columns]
+    df = df[["timestamp", "open", "high", "low", "close", "volume"]].apply(pd.to_numeric, errors="coerce")
+    df = df.dropna(subset=["timestamp", "open", "high", "low", "close"])
+    df["volume"] = df["volume"].fillna(0.0)
+    # Seconds (10-digit) → ms (13-digit)
+    if df["timestamp"].abs().max() < 1e11:
+        df["timestamp"] = df["timestamp"] * 1000
+    df["timestamp"] = df["timestamp"].astype("int64")
+    df = df.drop_duplicates("timestamp", keep="last").sort_values("timestamp").reset_index(drop=True)
+    print(f"  Seed: {len(df):,} bars, {pd.Timestamp(int(df['timestamp'].min()), unit='ms', tz='UTC')} → "
+          f"{pd.Timestamp(int(df['timestamp'].max()), unit='ms', tz='UTC')}")
+    return df
+
+
+def combine(older: pd.DataFrame, newer: pd.DataFrame) -> pd.DataFrame:
+    """Union of both frames; rows from `newer` win on duplicate timestamps."""
+    if older.empty:
+        return newer
+    if newer.empty:
+        return older
+    merged = pd.concat([older, newer], ignore_index=True)
+    return merged.drop_duplicates("timestamp", keep="last").sort_values("timestamp").reset_index(drop=True)
 
 
 def resample(df: pd.DataFrame, rule: str) -> pd.DataFrame:
@@ -245,6 +292,12 @@ def main():
     # Load existing data for incremental sync
     existing = load_existing(FILE_1M)
 
+    if args.seed:
+        seed = load_seed(pathlib.Path(args.seed).expanduser().resolve())
+        before = len(existing)
+        existing = combine(seed, existing)
+        print(f"Seed merged: {before:,} existing + {len(seed):,} seed → {len(existing):,} total\n")
+
     if existing.empty:
         print(f"No existing data found. Full sync from {args.years} years ago.")
         start_ms = earliest_ms
@@ -268,18 +321,10 @@ def main():
     if new_data.empty and existing.empty:
         sys.exit("No data fetched from Bybit. Check your network connection.")
 
-    # Merge with existing
+    # Append to existing; fresh Bybit bars replace the (possibly partial) last stored bar.
+    merged = combine(existing, new_data)
     if not existing.empty and not new_data.empty:
-        merged = pd.concat([existing, new_data], ignore_index=True)
-        merged = merged.drop_duplicates("timestamp").sort_values("timestamp").reset_index(drop=True)
         print(f"Merged: {len(existing):,} existing + {len(new_data):,} new → {len(merged):,} total")
-    elif not new_data.empty:
-        merged = new_data
-    else:
-        merged = existing
-
-    # Trim to max history window
-    merged = merged[merged["timestamp"] >= earliest_ms].reset_index(drop=True)
 
     # Save all timeframes
     print("\nWriting output files …")

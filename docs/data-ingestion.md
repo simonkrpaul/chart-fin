@@ -411,6 +411,35 @@ python scripts/bybit_sync.py
 
 Fetches 1-minute BTCUSDT bars from Bybit's v5 REST API. On subsequent runs it only fetches bars since the last stored candle, so weekend/offline gaps fill automatically.
 
+Existing history is **never trimmed**: `--years` only applies to the very first sync (when no `BTCUSDT_1m.csv` exists). Every later run appends new bars to whatever is already on disk — including older Kaggle history merged with `--seed`.
+
+### Merge Kaggle Bitcoin history + Bybit (one-time)
+
+Bybit only serves ~5 years. To keep the full 2012→now series, merge the Kaggle dump (see [Section 4](#4-kaggle-bitcoin--10-years-of-btcusd-1-minute-bars)) into the Bybit series once:
+
+```bash
+# 1. Get the Kaggle 1m CSV (skip if already on disk)
+python scripts/download_kaggle_btc.py
+
+# 2. Merge it and fill the gap up to now from Bybit
+python scripts/bybit_sync.py --seed public/data/data_kaggle/btcusd_1-min_data.csv
+
+# 3. From now on, plain re-runs append only
+python scripts/bybit_sync.py
+```
+
+What `--seed` does:
+
+- Accepts Kaggle columns (`Timestamp,Open,High,Low,Close,Volume`, seconds) or chart-fin columns (`timestamp,…`, ms); seconds are converted to ms.
+- Unions seed + existing 1m bars. On duplicate timestamps, existing/Bybit bars win over the seed.
+- Then fetches from the last stored bar to now and rewrites 1m/5m/1h/1d/1w + `manifest.json`.
+
+Notes:
+
+- Volume differs by source (Kaggle = Bitstamp BTC/USD, Bybit = BTCUSDT perp), so expect a volume step at the seam.
+- If Bybit is unreachable (5 failed attempts) the partial fetch is discarded and the existing/seeded data is still written — re-run later to fill the tail.
+- If the existing `BTCUSDT_1m.csv` can't be parsed, the script aborts rather than overwrite it.
+
 Output files (chart-fin manifest layout, picker sees them on refresh):
 
 ```
@@ -428,7 +457,8 @@ public/data/markets/manifest.json               ← rebuilt at end
 | Flag | Purpose |
 | --- | --- |
 | `--symbol BTCUSDT` | Trading pair (default `BTCUSDT`) |
-| `--years 5` | Look-back window (default 5, ≈ 20–40 min for full run) |
+| `--years 5` | Look-back for the **first** sync only (default 5, ≈ 20–40 min). Never trims existing data |
+| `--seed <csv>` | Merge an external 1m CSV (e.g. Kaggle `btcusd_1-min_data.csv`) under the existing data before syncing |
 | `--category linear` | Bybit market: `linear` perp, `inverse`, `spot` |
 | `--market crypto` | Which `markets/<bucket>/` folder to write into (default `crypto`) |
 | `--out-dir <dir>` | Override the output directory entirely (bypasses `markets/`) |
@@ -472,6 +502,8 @@ python scripts/bybit_sync.py --out-dir /tmp/bybit-dump --no-manifest
 | `pandas is required: pip install pandas` | `pip install pandas` — same for `requests` |
 | `Bybit REST 429` | Rate-limited — script waits and retries; nothing to do |
 | Weekly gaps appearing | Re-run the script — it fetches only the gap since the last candle |
+| `Failed to resolve 'api.bybit.com'` | Network/DNS/VPN blocks Bybit. Script gives up after 5 attempts and keeps existing data |
+| History shrank to 5 years | Old script version trimmed to `--years`. Re-run with `--seed public/data/data_kaggle/btcusd_1-min_data.csv` |
 | Symbol not found | Check https://www.bybit.com/en/trade for the exact ticker |
 
 ---
@@ -606,6 +638,15 @@ the same files. The last one to run wins. `download_kaggle_btc.py` gives
 you deeper history (back to 2012); `download_btc.py --binance` gives you
 the freshest bars (right up to now). You can chain them by running Kaggle
 first, then `download_btc.py --binance --days 30` to top-up the tail.
+
+**Recommended:** merge Kaggle into the Bybit series instead, so `bybit_sync.py`
+keeps appending on top of the full history:
+
+```bash
+python scripts/bybit_sync.py --seed public/data/data_kaggle/btcusd_1-min_data.csv
+```
+
+See [Merge Kaggle Bitcoin history + Bybit](#merge-kaggle-bitcoin-history--bybit-one-time).
 
 ---
 
