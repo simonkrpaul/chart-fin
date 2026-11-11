@@ -21,6 +21,9 @@ import { GoToDateDialog } from './components/GoToDateDialog';
 import { LayoutGrid } from './components/LayoutGrid';
 import { Sidebar } from './components/Sidebar';
 import { MobileShell } from './components/MobileShell';
+import { CycleBacktestPage } from './components/CycleBacktestPage';
+import { CycleBacktestChartStats } from './components/CycleBacktestChartStats';
+import { useCycleBacktestStore } from './store/cycleBacktestStore';
 import { useIsMobile } from './hooks/useIsMobile';
 import { useResizeObserver } from './hooks/useResizeObserver';
 import { useKeyboardShortcuts } from './hooks/useKeyboardShortcuts';
@@ -63,6 +66,7 @@ function DesktopShell() {
                   <ChartControls />
                   <ReplayControls />
                   <MeasurementOverlay />
+                  <CycleBacktestChartStats />
                 </>
               )}
             </div>
@@ -145,6 +149,7 @@ function AppInner() {
   }, []);
 
   const bg     = themeTokens.background;
+  const cycleReportOpen = useCycleBacktestStore(s => s.pageOpen);
 
   return (
     <div
@@ -160,7 +165,7 @@ function AppInner() {
     >
       <IngestProgressBadge />
       <GoToDateDialog open={goToDateOpen} onClose={closeGoToDate} />
-      {isMobile ? <MobileShell /> : <DesktopShell />}
+      {cycleReportOpen ? <CycleBacktestPage /> : isMobile ? <MobileShell /> : <DesktopShell />}
     </div>
   );
 }

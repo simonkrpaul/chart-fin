@@ -8,8 +8,9 @@ import { CycleCombinerPanel } from './CycleCombinerPanel';
 import { HurstCyclesPanel } from '../hurst/HurstCyclesPanel';
 import { ScriptsPanel } from './ScriptsPanel';
 import { ManualTradePanel } from './ManualTradePanel';
+import { CycleBacktestPanel } from './CycleBacktestPanel';
 
-export type TabKey = 'indicators' | 'backtest' | 'manual' | 'overlays' | 'journal' | 'ephemeris' | 'cycles' | 'hurst' | 'scripts';
+export type TabKey = 'indicators' | 'backtest' | 'cycleBacktest' | 'manual' | 'overlays' | 'journal' | 'ephemeris' | 'cycles' | 'hurst' | 'scripts';
 
 export interface TabDef {
   key: TabKey;
@@ -21,6 +22,7 @@ export interface TabDef {
 export const TABS: TabDef[] = [
   { key: 'indicators', label: 'Indicators',     icon: '📈', render: () => <IndicatorPanel /> },
   { key: 'backtest',   label: 'Strategy Tester', icon: '⚡', render: () => <BacktestPanel /> },
+  { key: 'cycleBacktest', label: 'Cycle Backtest', icon: '🎯', render: () => <CycleBacktestPanel /> },
   { key: 'manual',     label: 'Manual Backtest', icon: '💰', render: () => <ManualTradePanel /> },
   { key: 'overlays',   label: 'Offset Overlays', icon: '📊', render: () => <OverlayPanel /> },
   { key: 'journal',    label: 'Trade Journal',   icon: '📝', render: () => <TradeJournalPanel /> },
