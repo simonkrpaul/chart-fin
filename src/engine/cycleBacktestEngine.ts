@@ -55,6 +55,8 @@ export interface CycleBacktestConfig {
   lookAheadGuard: boolean;
   /** Merge consecutive same-type swings into the most extreme one, exactly like the overlay's Swing H/L plot. */
   matchOverlayPlot: boolean;
+  /** auto = follow the overlay's Mirror toggle; mirrored = a source high is traded as a low (buy) and vice versa. */
+  cycleOrientation: 'auto' | 'normal' | 'mirrored';
   /** A projected pivot "hits" if an actual pivot of the same type is within ±N bars. */
   hitToleranceBars: number;
   inSampleFraction: number;
@@ -80,6 +82,7 @@ export const DEFAULT_CYCLE_BACKTEST_CONFIG: CycleBacktestConfig = {
   slippageBps: 2,
   lookAheadGuard: true,
   matchOverlayPlot: true,
+  cycleOrientation: 'auto',
   hitToleranceBars: 3,
   inSampleFraction: 0.7,
   monteCarloRuns: 500,
@@ -108,7 +111,7 @@ export interface CycleBacktestInput {
   config: CycleBacktestConfig;
   bars: CycleBar[];
   source: CycleSourceBar[];
-  meta: { overlayLabel: string; offsetDays: number; timeframe: string };
+  meta: { overlayLabel: string; offsetDays: number; timeframe: string; overlayMirrored: boolean };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -465,9 +468,21 @@ function mergeLikeOverlay(pivots: SourcePivot[]): { pivots: SourcePivot[]; looka
   return { pivots: kept, lookaheadMerges };
 }
 
-function swingPivots(src: CycleSourceBar[], lr: number, matchOverlayPlot: boolean): { pivots: SourcePivot[]; lookaheadMerges: number } {
+function swingPivots(
+  src: CycleSourceBar[],
+  lr: number,
+  matchOverlayPlot: boolean,
+  mirrored: boolean,
+): { pivots: SourcePivot[]; lookaheadMerges: number } {
   const raw = detectSourcePivots(src, lr);
-  return matchOverlayPlot ? mergeLikeOverlay(raw) : { pivots: raw, lookaheadMerges: 0 };
+  const res = matchOverlayPlot ? mergeLikeOverlay(raw) : { pivots: raw, lookaheadMerges: 0 };
+  // The mirror plot draws the same pivots flipped vertically: a source high appears as a low.
+  if (mirrored) res.pivots = res.pivots.map(p => ({ ...p, type: p.type === 'high' ? 'low' : 'high' }));
+  return res;
+}
+
+export function isCycleMirrored(cfg: CycleBacktestConfig, overlayMirrored: boolean): boolean {
+  return cfg.cycleOrientation === 'mirrored' || (cfg.cycleOrientation === 'auto' && overlayMirrored);
 }
 
 function mapPivots(pivots: SourcePivot[], bars: CycleBar[], barTs: Float64Array, barSlot: Float64Array, barInterval: number): MappedPivot[] {
@@ -959,7 +974,8 @@ export function runCycleBacktest(input: CycleBacktestInput, onProgress?: Progres
   const minor = minorSwingLevels(bars, Math.max(1, cfg.minorSwingLR));
   const dayEnds = dayEndIndices(bars);
 
-  const swings = swingPivots(source, cfg.swingLR, cfg.matchOverlayPlot);
+  const mirrored = isCycleMirrored(cfg, meta.overlayMirrored);
+  const swings = swingPivots(source, cfg.swingLR, cfg.matchOverlayPlot, mirrored);
   const pivots = mapPivots(swings.pivots, bars, barTs, barSlot, barInterval);
   const inRange = pivots.filter(p => p.status === 'in');
   const { events, used, skipped } = buildEvents(pivots, bars, cfg.entryOffsetBars, cfg.lookAheadGuard);
@@ -1078,7 +1094,7 @@ export function runCycleBacktest(input: CycleBacktestInput, onProgress?: Progres
     let done = 0;
     const total = sweepLRs.length * sweepOffsets.length;
     for (const lr of sweepLRs) {
-      const pv = mapPivots(swingPivots(source, lr, cfg.matchOverlayPlot).pivots, bars, barTs, barSlot, barInterval);
+      const pv = mapPivots(swingPivots(source, lr, cfg.matchOverlayPlot, mirrored).pivots, bars, barTs, barSlot, barInterval);
       for (const off of sweepOffsets) {
         const ev = buildEvents(pv, bars, off, cfg.lookAheadGuard).events;
         const s = simulate(bars, ev, cfg, atr, minor);

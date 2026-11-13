@@ -76,6 +76,20 @@ export const CycleBacktestPanel: React.FC = () => {
       </div>
 
       <div style={row}>
+        <span style={label}>Cycle orientation</span>
+        <select
+          value={config.cycleOrientation}
+          onChange={e => setConfig({ cycleOrientation: e.target.value as CycleBacktestConfig['cycleOrientation'] })}
+          style={{ ...input, width: 140 }}
+          title="Mirrored: the overlay's swing high is traded as a low (buy) and its swing low as a high (sell)"
+        >
+          <option value="auto">Auto ({selectedOverlay?.mirror ? 'mirrored' : 'normal'})</option>
+          <option value="normal">Normal</option>
+          <option value="mirrored">Mirrored</option>
+        </select>
+      </div>
+
+      <div style={row}>
         <span style={label}>Entry</span>
         <select
           value={config.entryMode}

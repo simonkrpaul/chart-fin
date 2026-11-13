@@ -5,7 +5,7 @@
 import React, { useMemo } from 'react';
 import { useChartStore } from '../store/chartStore';
 import { useCycleBacktestStore } from '../store/cycleBacktestStore';
-import type { CycleBacktestResult, PerfMetrics } from '../engine/cycleBacktestEngine';
+import { isCycleMirrored, type CycleBacktestResult, type PerfMetrics } from '../engine/cycleBacktestEngine';
 
 const GREEN = '#26a69a';
 const RED = '#ef5350';
@@ -204,7 +204,7 @@ export const CycleBacktestPage: React.FC = () => {
           <div style={{ flex: 1 }}>
             <div style={{ fontSize: 18, fontWeight: 700 }}>Offset Cycle Backtest Report</div>
             <div style={{ color: text }}>
-              {r.meta.overlayLabel} · offset {r.meta.offsetDays} d · {r.meta.timeframe} · swing {r.config.swingLR} ·{' '}
+              {r.meta.overlayLabel}{isCycleMirrored(r.config, r.meta.overlayMirrored ?? false) ? ' (mirrored)' : ''} · offset {r.meta.offsetDays} d · {r.meta.timeframe} · swing {r.config.swingLR} ·{' '}
               {r.config.entryMode === 'pivot_open' ? 'enter at projected pivot' : 'confirm-break entry'} · {fmtDate(r.meta.fromTs)} → {fmtDate(r.meta.toTs)} · {r.meta.bars.toLocaleString()} bars
             </div>
           </div>

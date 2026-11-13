@@ -109,7 +109,12 @@ export const useCycleBacktestStore = create<CycleBacktestState>()((set, get) => 
       config,
       bars,
       source,
-      meta: { overlayLabel: overlay.config.label, offsetDays: overlay.config.calendarDayOffset, timeframe: s.timeframe },
+      meta: {
+        overlayLabel: overlay.config.label,
+        offsetDays: overlay.config.calendarDayOffset,
+        timeframe: s.timeframe,
+        overlayMirrored: overlay.config.mirror ?? false,
+      },
     });
   },
 
